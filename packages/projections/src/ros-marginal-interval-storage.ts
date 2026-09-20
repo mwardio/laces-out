@@ -19,6 +19,7 @@ import {
 import type { RosMarginalIntervalQualification } from "./ros-marginal-interval-qualification.js";
 import { projectionScoringRulesFromProfileKey } from "./scoring-position-keys.js";
 import { sha256Hex } from "./sha256.js";
+import { frozenRosBenchmarkBindingIsValid } from "./frozen-ros-benchmark.js";
 
 export const ROS_MARGINAL_INTERVAL_STORAGE_VERSION = "ros-marginal-interval-storage-v1";
 const QUALIFICATION = "ros-marginal-interval-qualification-v1";
@@ -392,7 +393,10 @@ function meanChoice(
       identity(artifact.evidenceIdentity);
       if (!previous)
         equal(artifact.evidenceIdentity, receipt.liveArtifact.context.evidenceIdentity);
-      const source = receipt.sources[previous ? "previous" : "candidate"].source;
+      const source =
+        previous && receipt.frozenPrevious !== undefined
+          ? receipt.frozenPrevious.original.source
+          : receipt.sources[previous ? "previous" : "candidate"].source;
       check(artifact.evidenceIdentity.scoringProfileKey === source.scoringProfileKey);
       check(
         artifact.evidenceIdentity.contextualModelVersion.startsWith(
@@ -493,6 +497,9 @@ function validateQualification(value: unknown): asserts value is RosMarginalInte
     "linkage",
     "reasons",
     "qualificationChecksum",
+    ...(value !== null && typeof value === "object" && Object.hasOwn(value, "frozenPrevious")
+      ? ["frozenPrevious"]
+      : []),
   ]);
   const receipt = value as unknown as RosMarginalIntervalQualification;
   check(
@@ -567,6 +574,11 @@ function validateQualification(value: unknown): asserts value is RosMarginalInte
     receipt.sources.candidate.source.scoringProfileKey ===
       receipt.sources.previous.source.scoringProfileKey,
   );
+  if (receipt.frozenPrevious !== undefined)
+    check(
+      frozenRosBenchmarkBindingIsValid(receipt.frozenPrevious, receipt.sources.previous),
+      "invalid frozen benchmark binding",
+    );
   const training = receipt.intervalTraining;
   check((training === null) === (receipt.sources.intervalTraining === null));
   if (training !== null) {
@@ -1116,6 +1128,7 @@ export function buildRosMarginalIntervalStoredCells(input: {
   for (const receipt of input.qualifications) {
     equal(receipt.sourceScope, first.sourceScope);
     equal(receipt.sources, first.sources);
+    equal(receipt.frozenPrevious ?? null, first.frozenPrevious ?? null);
     check(receipt.forecastSeason === first.forecastSeason);
   }
   for (const required of first.sourceScope.requiredCells)

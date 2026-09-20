@@ -19,6 +19,7 @@ import {
 } from "../../projections/src/ros-marginal-interval-storage.js";
 import { evaluateFirstPartyRosChampionPolicy } from "../../projections/src/rest-of-season.js";
 import { sha256Hex } from "../../projections/src/sha256.js";
+import { buildFrozenRosBenchmark } from "../../projections/src/frozen-ros-benchmark.js";
 import {
   createDatabase,
   dataSources,
@@ -410,6 +411,65 @@ describe.skipIf(!dockerAvailable())("0053 immutable ROS marginal persistence", (
       .where(eq(projectionModelRuns.sourceSyncRunId, value.run.sourceSyncRunId));
     expect(run!.marginalIntervalContractVersion).toBe(2);
   });
+  it("accepts one consistent frozen benchmark lineage and rejects forged or mixed lineage", async () => {
+    const input = rosMarginalIntervalQualificationFullFixtureInput();
+    const frozen = buildFrozenRosBenchmark(
+      { original: input.previous, comparisonManifestChecksum: sha256Hex("pinned-comparison") },
+      input.previous,
+      qualifications[0]!.meanSelectorOptions,
+    ).binding;
+    const bound = qualifications.map((q) => {
+      const value = json({ ...q, frozenPrevious: frozen });
+      rehash(value, "qualificationChecksum");
+      return value as unknown as typeof q;
+    });
+    const stored = buildRosMarginalIntervalStorage({
+      qualifications: bound,
+      championArtifactChecksum: artifact.artifactChecksum,
+      releasedCells: [CELL],
+    });
+    const admitted = {
+      schemaVersion: 1,
+      qualificationMethod: "ros-marginal-interval-qualification-v1",
+      qualifications: bound,
+      cells: buildRosMarginalIntervalStoredCells({
+        qualifications: bound,
+        releasedCells: bound.filter((q) => q.state === "qualified").map((q) => q.cell),
+      }),
+    };
+    const config = json(configuration);
+    ((config.releasingBuckets as Json[])[0]!.intervalCalibration as Json).qualificationChecksum =
+      bound.find(
+        (q) => q.cell.position === CELL.position && q.cell.bucket === CELL.bucket,
+      )!.qualificationChecksum;
+    const accepted = async (proof: unknown) => {
+      const result = await handle.db.execute(
+        sql`select ros_marginal_envelope(${JSON.stringify(stored)}::jsonb,${JSON.stringify(proof)}::jsonb,${JSON.stringify(artifact.policy)}::jsonb,${JSON.stringify(config)}::jsonb) as valid`,
+      );
+      return result[0]!.valid;
+    };
+    expect(await accepted(admitted)).toBe(true);
+    for (const change of ["observation", "manifest", "version", "score", "extra"] as const) {
+      const mutated = json(admitted);
+      const q = (mutated.qualifications as Json[])[0]!;
+      q.frozenPrevious = structuredClone(q.frozenPrevious);
+      const binding = q.frozenPrevious as Json;
+      if (change === "observation")
+        (binding.correctedObservations as Json).rowsChecksum = sha256Hex("different-observations");
+      if (change === "manifest") binding.comparisonManifestChecksum = sha256Hex("mixed-package");
+      if (change === "version") binding.version = "unknown";
+      if (change === "score")
+        ((binding.original as Json).source as Json).scoringProfileKey =
+          '[{"statId":"receptions","points":99,"bonuses":[]}]';
+      if (change === "extra") binding.unexpected = true;
+      // Exercise each binding's own checks too; a single changed cell alone would be rejected
+      // by cross-cell equality before those checks mattered.
+      if (change !== "manifest")
+        for (const other of (mutated.qualifications as Json[]).slice(1))
+          other.frozenPrevious = structuredClone(binding);
+      expect(await accepted(mutated)).toBe(false);
+    }
+  }, 30_000);
   it("keeps valid legacy summaries null without reinterpreting their intervals", async () => {
     const [row] = await insert(fixture(true));
     expect(row!.intervalCalibration).toBeNull();

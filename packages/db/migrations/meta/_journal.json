@@ -379,6 +379,13 @@
       "when": 1789780483980,
       "tag": "0053_ros_marginal_interval_contract",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1789870195049,
+      "tag": "0054_ros_frozen_benchmark_lineage",
+      "breakpoints": true
     }
   ]
 }

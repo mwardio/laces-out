@@ -68,6 +68,72 @@ function storageMutation(mutate: (receipt: Mutable<RosMarginalIntervalStorage>) 
 }
 
 describe("bounded immutable qualification receipt validation", () => {
+  it("persists an authenticated frozen benchmark with its original scoring metadata", () => {
+    const input = rosMarginalIntervalQualificationFixtureInput();
+    const original = structuredClone(input.previous);
+    const oldRules = JSON.parse(original.source.scoringProfileKey) as readonly Record<
+      string,
+      unknown
+    >[];
+    const oldKey = JSON.stringify(
+      oldRules.map((rule) => {
+        const { statDefinition: _definition, ...numeric } = rule;
+        void _definition;
+        return numeric;
+      }),
+    );
+    Object.assign(original.source, {
+      scoringProfileKey: oldKey,
+      reportChecksum: sha256Hex("original-report-with-old-scoring-metadata"),
+    });
+    for (const year of original.heldOutSeasons)
+      for (const row of year.forecasts) Object.assign(row, { scoringProfileKey: oldKey });
+    Object.assign(original, {
+      rowsChecksum: validateMarginalRosTrainingCohort(
+        original.heldOutSeasons,
+        original.heldOutSeasons,
+      ).provenance.evaluationRowsChecksum,
+    });
+    const corrected = buildRosMarginalIntervalQualificationSet({
+      ...input,
+      frozenPrevious: {
+        original,
+        comparisonManifestChecksum: sha256Hex("authenticated-comparison-manifest"),
+      },
+    });
+    for (const receipt of corrected)
+      expect(rosMarginalIntervalQualificationIsPublicationQualified(receipt)).toBe(true);
+    const persisted = buildRosMarginalIntervalStorage({
+      qualifications: corrected,
+      championArtifactChecksum: CHAMPION,
+      releasedCells: corrected.map((receipt) => receipt.cell),
+    });
+    expect(
+      rosMarginalIntervalStorageMatchesQualifications(persisted, {
+        qualifications: corrected,
+        championArtifactChecksum: CHAMPION,
+        releasedCells: corrected.map((receipt) => receipt.cell),
+      }),
+    ).toBe(true);
+    const forged = structuredClone(corrected[0]!) as Mutable<RosMarginalIntervalQualification>;
+    Object.assign(forged.frozenPrevious!.correctedObservations, {
+      rowsChecksum: sha256Hex("different-observed-rows"),
+    });
+    forged.frozenPrevious = rehash(forged.frozenPrevious!, "checksum");
+    expect(
+      rosMarginalIntervalQualificationIsStructurallyValid(rehash(forged, "qualificationChecksum")),
+    ).toBe(false);
+    const mixed = corrected.map((receipt) =>
+      structuredClone(receipt),
+    ) as Mutable<RosMarginalIntervalQualification>[];
+    mixed[0]!.frozenPrevious!.comparisonManifestChecksum = sha256Hex("different-manifest");
+    mixed[0]!.frozenPrevious = rehash(mixed[0]!.frozenPrevious!, "checksum");
+    mixed[0] = rehash(mixed[0]!, "qualificationChecksum");
+    expect(() =>
+      buildRosMarginalIntervalStoredCells({ qualifications: mixed, releasedCells: [] }),
+    ).toThrow(/inconsistent receipt/u);
+  });
+
   it("accepts authoritative reconstruction and JSONB key ordering without refitting", () => {
     for (const receipt of qualifications) {
       expect(rosMarginalIntervalQualificationIsStructurallyValid(receipt)).toBe(true);

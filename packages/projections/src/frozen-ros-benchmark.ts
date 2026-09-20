@@ -159,3 +159,70 @@ export function buildFrozenRosBenchmark(
     binding: { ...binding, checksum: sha256Hex(canonical(binding)) },
   };
 }
+
+export type FrozenRosBenchmarkBinding = ReturnType<typeof buildFrozenRosBenchmark>["binding"];
+
+/** Storage integrity only: admission must separately authenticate the original report bytes. */
+export function frozenRosBenchmarkBindingIsValid(
+  value: unknown,
+  corrected: FrozenRosBenchmarkBinding["correctedObservations"],
+): value is FrozenRosBenchmarkBinding {
+  try {
+    const object = (input: unknown, keys: readonly string[]): Record<string, unknown> => {
+      if (
+        input === null ||
+        typeof input !== "object" ||
+        Array.isArray(input) ||
+        Object.keys(input).length !== keys.length ||
+        keys.some((key) => !Object.hasOwn(input, key))
+      )
+        fail("invalid stored binding shape");
+      return input as Record<string, unknown>;
+    };
+    const binding = object(value, [
+      "version",
+      "comparisonManifestChecksum",
+      "original",
+      "correctedObservations",
+      "checksum",
+    ]);
+    if (binding.version !== FROZEN_ROS_BENCHMARK_VERSION) fail("invalid stored binding version");
+    digest(binding.comparisonManifestChecksum as string);
+    digest(binding.checksum as string);
+    for (const role of ["original", "correctedObservations"] as const) {
+      const evidence = object(binding[role], ["source", "sourceManifestChecksum", "rowsChecksum"]);
+      const source = object(evidence.source, [
+        "modelVersion",
+        "policyVersion",
+        "scoringProfileKey",
+        "physicalCorpusChecksum",
+        "reportChecksum",
+      ]);
+      for (const pin of [
+        evidence.sourceManifestChecksum,
+        evidence.rowsChecksum,
+        source.physicalCorpusChecksum,
+        source.reportChecksum,
+      ])
+        digest(pin as string);
+      if (
+        source.modelVersion !== "laces-ros-distribution-v12" ||
+        source.policyVersion !== "season-walk-forward-mean-rmse-block-wis-cqr-v7"
+      )
+        fail("invalid stored benchmark model");
+      numericalScoringKey(source.scoringProfileKey as string);
+    }
+    const stored = value as FrozenRosBenchmarkBinding;
+    if (
+      numericalScoringKey(stored.original.source.scoringProfileKey) !==
+      numericalScoringKey(stored.correctedObservations.source.scoringProfileKey)
+    )
+      fail("stored numerical scoring differs");
+    if (canonical(stored.correctedObservations) !== canonical(corrected))
+      fail("stored corrected observations differ");
+    const { checksum, ...body } = stored;
+    return checksum === sha256Hex(canonical(body));
+  } catch {
+    return false;
+  }
+}
