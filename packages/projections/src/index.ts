@@ -519,4 +519,5 @@ export * from "./ros-marginal-interval-storage.js";
 export * from "./marginal-ros-release.js";
 
 export * from "./ros-release-identity.js";
+export * from "./point-ros-release.js";
 export * from "./ros-artifact-blockers.js";

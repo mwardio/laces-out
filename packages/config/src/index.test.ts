@@ -36,6 +36,7 @@ describe("loadEnvironment", () => {
     expect(loadEnvironment({ ROS_RELEASE_RAIL: "marginal-v8" }).ROS_RELEASE_RAIL).toBe(
       "marginal-v8",
     );
+    expect(loadEnvironment({ ROS_RELEASE_RAIL: "point-v1" }).ROS_RELEASE_RAIL).toBe("point-v1");
     expect(
       loadEnvironment({ ROS_MARGINAL_BUNDLE_CHECKSUM: "a".repeat(64) })
         .ROS_MARGINAL_BUNDLE_CHECKSUM,

@@ -13,6 +13,11 @@ import {
   type FirstPartyRosChampionPolicy,
 } from "./rest-of-season.js";
 import { sha256Hex } from "./sha256.js";
+import {
+  FIRST_PARTY_ROS_POINT_POLICY_VERSION,
+  firstPartyRosPointArtifactIsConsistent,
+  firstPartyRosPointQualificationIsStructurallyValid,
+} from "./point-ros-release.js";
 
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
 const FIRST_PARTY_ROS_BUCKETS = ["one-to-four", "five-to-eight", "nine-plus"] as const;
@@ -163,10 +168,12 @@ export interface RosArtifactBlockerDiagnostics {
  * Interpret diagnostics only after the caller validates the immutable admitted artifact. This
  * classifier does not authenticate receipts, admit evidence, or authorize publication itself.
  */
-export function deriveRosArtifactBlockers(input: {
-  readonly policyVersion: string;
-  readonly releaseGate: Record<string, unknown>;
-}): RosArtifactBlockerDiagnostics {
+export function deriveRosArtifactBlockers(
+  input: {
+    readonly policyVersion: string;
+    readonly releaseGate: Record<string, unknown>;
+  } & Partial<Omit<RosArtifactBlockerContext, "policy">> & { readonly policy?: unknown },
+): RosArtifactBlockerDiagnostics {
   const rawBlockers = Array.isArray(input.releaseGate.blockers)
     ? input.releaseGate.blockers.filter((value): value is string => typeof value === "string")
     : [];
@@ -174,6 +181,9 @@ export function deriveRosArtifactBlockers(input: {
   const supersededIntervalDiagnostics: string[] = [];
   const blockedCells = new Set<string>();
   const marginal = input.policyVersion === FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION;
+  const point =
+    input.policyVersion === FIRST_PARTY_ROS_POINT_POLICY_VERSION &&
+    firstPartyRosPointArtifactIsConsistent(input as RosArtifactBlockerContext);
   const intervals = input.releaseGate.marginalIntervals;
   const qualified = new Set<string>();
   if (marginal && isRecord(intervals) && Array.isArray(intervals.qualifications)) {
@@ -188,27 +198,54 @@ export function deriveRosArtifactBlockers(input: {
         qualified.add(`${receipt.cell.position}:${receipt.cell.bucket}`);
     }
   }
+  const points = input.releaseGate.pointForecasts;
+  if (point && isRecord(points) && Array.isArray(points.qualifications)) {
+    for (const receipt of points.qualifications) {
+      if (firstPartyRosPointQualificationIsStructurallyValid(receipt)) {
+        const selected = receipt.selectedStrategy === "contextual" ? "contextual" : "recency";
+        if (receipt.convergence[selected].rate === 1)
+          qualified.add(`${receipt.position}:${receipt.bucket}`);
+      }
+    }
+  }
   for (const blocker of rawBlockers) {
     const match = ARTIFACT_CELL_BLOCKER_PATTERN.exec(blocker);
     if (match) {
       const cell = `${match[1]}:${match[2]}`;
       if (
-        marginal &&
+        (marginal || point) &&
         qualified.has(cell) &&
         blocker.startsWith("calibration_") &&
-        REPLACED_LEGACY_INTERVAL_BLOCKERS.has(blocker.slice(match[0].length))
+        (REPLACED_LEGACY_INTERVAL_BLOCKERS.has(blocker.slice(match[0].length)) ||
+          (point && blocker.slice(match[0].length) === "convergence_below_minimum"))
       ) {
         supersededIntervalDiagnostics.push(blocker);
         continue;
       }
       blockedCells.add(cell);
-    } else if (marginal) {
+    } else if (marginal || input.policyVersion === FIRST_PARTY_ROS_POINT_POLICY_VERSION) {
       for (const position of POSITIONS)
         for (const bucket of FIRST_PARTY_ROS_BUCKETS) blockedCells.add(`${position}:${bucket}`);
     }
     effectiveBlockers.push(blocker);
   }
   return { rawBlockers, effectiveBlockers, supersededIntervalDiagnostics, blockedCells };
+}
+
+/** Read-only point status requires an authenticated enclosing artifact before suppression. */
+export function deriveVerifiedPointRosArtifactBlockers(
+  artifact: RosArtifactBlockerContext & { readonly artifactChecksum: string },
+): RosArtifactBlockerDiagnostics | null {
+  try {
+    if (
+      artifact.artifactChecksum !== firstPartyRosReleaseArtifactChecksum(artifact) ||
+      !firstPartyRosPointArtifactIsConsistent(artifact)
+    )
+      return null;
+    return deriveRosArtifactBlockers(artifact);
+  } catch {
+    return null;
+  }
 }
 
 /**

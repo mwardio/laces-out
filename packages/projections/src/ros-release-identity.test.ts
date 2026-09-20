@@ -20,6 +20,11 @@ describe("explicit ROS outer release identity", () => {
       policyVersion: FIRST_PARTY_ROS_MARGINAL_POLICY_VERSION,
       calibrationVersion: MARGINAL_INTERVAL_CALIBRATION_VERSION,
     });
+    expect(firstPartyRosReleaseIdentity("point-v1")).toEqual({
+      modelVersion: FIRST_PARTY_ROS_MODEL_VERSION,
+      policyVersion: "season-walk-forward-mean-only-v1",
+      calibrationVersion: "unavailable-point-only-v1",
+    });
     expect(FIRST_PARTY_ROS_POLICY_VERSION).toBe("season-walk-forward-mean-rmse-block-wis-cqr-v7");
   });
 

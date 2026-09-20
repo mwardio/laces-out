@@ -4016,6 +4016,11 @@ export interface FirstPartyRosLiveReleaseEvidence extends FirstPartyRosEvidenceI
     readonly contextual: FirstPartyRosHeldOutConvergenceCandidateEvidence;
     readonly recency: FirstPartyRosHeldOutConvergenceCandidateEvidence;
   };
+  /** Complete diagnostics required to independently validate a point-only release. */
+  readonly pointConvergence?: {
+    readonly contextual: FirstPartyRosConvergenceDiagnostic;
+    readonly recency: FirstPartyRosConvergenceDiagnostic;
+  };
 }
 
 export interface FirstPartyRosReleaseGateOptions {

@@ -138,7 +138,7 @@ const environmentSchema = z.object({
    */
   EMAIL_VERIFICATION_ENABLED: booleanFlag,
   /** Explicit release rail; changes neither the mean policy nor historical physical identities. */
-  ROS_RELEASE_RAIL: z.enum(["legacy-v7", "marginal-v8"]).default("legacy-v7"),
+  ROS_RELEASE_RAIL: z.enum(["legacy-v7", "marginal-v8", "point-v1"]).default("legacy-v7"),
   /** Immutable, shared paired-corpus manifest. Missing v8 evidence defers profile work visibly. */
   ROS_MARGINAL_BUNDLE_CHECKSUM: z.preprocess(
     blankToUndefined,
