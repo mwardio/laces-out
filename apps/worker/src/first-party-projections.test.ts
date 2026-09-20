@@ -2239,6 +2239,164 @@ describe("weekly provider-specific defense routing", () => {
     ).toBe(true);
   });
 
+  it.each(["missing", "legacy", "different-provider"] as const)(
+    "isolates a locked D/ST with %s scoring evidence while retaining frozen offense",
+    (evidence) => {
+      const rules = [...DST_SUPPORTED_RULES, espnRule("120", 1)];
+      const variant = pointsAllowedVariant(26);
+      const defenseVariants = { "espn-2019-v1": variant };
+      const rosters = [
+        ...FULL_ROSTER,
+        { playerId: "roster-alias-dst-kc", primaryPosition: "D/ST", nflTeam: "KC" },
+      ];
+      const baseline = planPublications({ rules, rosters, defenseVariants }).publications[0]!;
+      const frozenReceiver = {
+        ...baseline.rows.find((row) => row.playerId === "player-wr")!,
+        scoringProfileKey: baseline.profileKey,
+        confidence: 0.3,
+      };
+      const frozenDefense = {
+        ...baseline.rows.find((row) => row.playerId === "roster-alias-dst-kc")!,
+        scoringProfileKey: baseline.profileKey,
+      };
+      const prior = {
+        ...baseline.rows.find((row) => row.playerId === "roster-alias-dst-buf")!,
+        scoringProfileKey:
+          evidence === "legacy"
+            ? "legacy"
+            : projectionScoringProfileKey(pointsAllowedProfile("yahoo-2022-v1")),
+      };
+      const previousRows = new Map(
+        [frozenReceiver, frozenDefense, ...(evidence === "missing" ? [] : [prior])].map((row) => [
+          row.playerId,
+          row,
+        ]),
+      );
+      const before = JSON.stringify([...previousRows]);
+      const plan = planPublications({
+        rules,
+        rosters,
+        startedPositions: ["WR"],
+        previousRows,
+        defenseVariants: {
+          "espn-2019-v1": {
+            ...variant,
+            publishedDefenses: variant.publishedDefenses.map((row) => ({
+              ...row,
+              gameStarted: row.team === "BUF" || evidence !== "missing",
+            })),
+          },
+        },
+      });
+      expect(plan.publications).toHaveLength(1);
+      const publication = plan.publications[0]!;
+      expect(publication.metadata.publishedPositions).toEqual(["QB", "RB", "WR", "TE", "K", "DST"]);
+      expect(publication.rows).toEqual(
+        baseline.rows
+          .filter((row) => row.playerId !== prior.playerId)
+          .map((row) =>
+            row.playerId === frozenReceiver.playerId
+              ? frozenReceiver
+              : row.playerId === frozenDefense.playerId && evidence !== "missing"
+                ? frozenDefense
+                : row,
+          ),
+      );
+      expect(publication.metadata.frozenPlayerCount).toBe(evidence === "missing" ? 1 : 2);
+      expect(publication.metadata.frozenPointPolicyVersions).toEqual({
+        "player-wr": frozenReceiver.pointPolicyVersion,
+        ...(evidence === "missing"
+          ? {}
+          : { "roster-alias-dst-kc": frozenDefense.pointPolicyVersion }),
+      });
+      expect(publication.metadata.unavailableLockedPlayers).toEqual([
+        {
+          playerId: prior.playerId,
+          position: "DST",
+          reason:
+            evidence === "missing"
+              ? "missing-pre-kickoff-forecast"
+              : "incompatible-pre-kickoff-scoring",
+        },
+      ]);
+      expect(plan.withheld).toEqual([]);
+      expect(plan.notes).toHaveLength(1);
+      expect(plan.notes).toMatchObject([
+        {
+          leagueSeasonId: LEAGUE_SEASON_ID,
+          code: "locked-defense-forecast-unavailable",
+        },
+      ]);
+      expect(plan.notes[0]?.message).toContain("1 locked roster D/ST");
+      expect(JSON.stringify([...previousRows])).toBe(before);
+    },
+  );
+
+  it("keeps a compatible locked D/ST forecast and continues to publish unlocked defenses", () => {
+    const rules = [...DST_SUPPORTED_RULES, espnRule("120", 1)];
+    const variant = pointsAllowedVariant(26);
+    const baseline = planPublications({
+      rules,
+      rosters: FULL_ROSTER,
+      defenseVariants: { "espn-2019-v1": variant },
+    }).publications[0]!;
+    const previous = {
+      ...baseline.rows.find((row) => row.playerId === "roster-alias-dst-buf")!,
+      mean: 99,
+      floor: 90,
+      ceiling: 110,
+      scoringProfileKey: baseline.profileKey,
+    };
+    const plan = planPublications({
+      rules,
+      rosters: FULL_ROSTER,
+      previousRows: new Map([[previous.playerId, previous]]),
+      defenseVariants: {
+        "espn-2019-v1": {
+          ...variant,
+          publishedDefenses: variant.publishedDefenses.map((row) => ({
+            ...row,
+            gameStarted: row.team === "BUF",
+          })),
+        },
+      },
+    });
+    expect(plan.withheld).toEqual([]);
+    expect(plan.publications[0]?.rows.find((row) => row.playerId === previous.playerId)).toEqual(
+      previous,
+    );
+    expect(plan.publications[0]?.metadata.publishedPositions).toContain("DST");
+    expect(
+      plan.publications[0]?.rows.some((row) => row.playerId === firstPartyDefensePlayerId("KC")),
+    ).toBe(true);
+  });
+
+  it("does not publish an empty D/ST-only set when its locked forecast is unavailable", () => {
+    const variant = pointsAllowedVariant(26);
+    const plan = planPublications({
+      rules: [espnRule("120", 1)],
+      rosters: PUBLICATION_TEAMS.map((team) => ({
+        playerId: firstPartyDefensePlayerId(team),
+        primaryPosition: "D/ST",
+        nflTeam: team,
+      })),
+      defenseVariants: {
+        "espn-2019-v1": {
+          ...variant,
+          publishedDefenses: variant.publishedDefenses.map((row) => ({
+            ...row,
+            gameStarted: true,
+          })),
+        },
+      },
+    });
+    expect(plan.publications).toEqual([]);
+    expect(plan.withheld[0]?.scope).toBe("league");
+    expect(plan.withheld[0]?.reasons).toContainEqual(
+      expect.stringContaining("2 locked roster D/ST"),
+    );
+  });
+
   it("binds each exact provider history to the training cache identity", () => {
     const input = {
       season: 2026,
