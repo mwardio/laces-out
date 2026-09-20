@@ -177,6 +177,41 @@ function snapshot(overrides: Partial<InSeasonDecisionSnapshot> = {}): InSeasonDe
 }
 
 describe("buildDecisionInboxSummary", () => {
+  it("labels partial totals immediately and distinguishes unavailable forecasts from real zeroes", () => {
+    const plan = lineup();
+    plan.assignments[0] = {
+      ...plan.assignments[0]!,
+      player: player(1, 0),
+      locked: true,
+    };
+    const source = snapshot({ lineup: plan });
+    const item = () =>
+      buildDecisionInboxSummary(source).items.find((row) => row.kind === "lineup")!;
+    const completeId = item().id;
+    expect(item().summary).toBe(
+      "The model projects 108.00 points with 2 slot changes, compared with 100.00 for your current lineup.",
+    );
+
+    plan.totalsScope = "projected-players-only";
+    const partialId = item().id;
+    expect(partialId).not.toBe(completeId);
+    expect(item().summary).toBe(
+      "Partial projected totals are 108.00 points with 2 slot changes, compared with 100.00 for your current lineup. Locked players without a forecast are excluded.",
+    );
+    plan.assignments[0].projectionUnavailable = true;
+    const unavailableId = item().id;
+    expect(unavailableId).not.toBe(partialId);
+    expect(plan.assignments[0].player.projectedPoints).toBe(0);
+    expect(item().impact.value).toBe(8);
+    expect(inSeasonDecisionSnapshotSchema.safeParse(source).success).toBe(true);
+    expect(decisionInboxResponseSchema.safeParse(buildDecisionInboxSummary(source)).success).toBe(
+      true,
+    );
+    source.generatedAt = LATER;
+    source.provenance.projectionFreshness.observedAt = LATER;
+    expect(item().id).toBe(unavailableId);
+  });
+
   it("renews review identity for changed forecast disagreements but not their refresh clocks", () => {
     const plan = lineup();
     const source = snapshot({ lineup: plan });

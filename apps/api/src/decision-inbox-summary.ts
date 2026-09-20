@@ -127,6 +127,7 @@ export function buildDecisionInboxSummary(
         projectedGain: lineup.projectedGain,
         currentProjectedPoints: lineup.currentProjectedPoints,
         optimalProjectedPoints: lineup.optimalProjectedPoints,
+        ...(lineup.totalsScope ? { totalsScope: lineup.totalsScope } : {}),
         forecastDisagreements: lineup.notes.filter((note) =>
           note.startsWith("Forecast disagreement:"),
         ),
@@ -136,6 +137,7 @@ export function buildDecisionInboxSummary(
             slotId: assignment.slotId,
             player: playerIdentity(assignment.player),
             locked: assignment.locked,
+            ...(assignment.projectionUnavailable ? { projectionUnavailable: true } : {}),
           })),
         changes: changes.map((change) => ({
           slotId: change.slotId,
@@ -147,7 +149,9 @@ export function buildDecisionInboxSummary(
       }),
       kind: "lineup",
       title,
-      summary: `The model projects ${lineup.optimalProjectedPoints.toFixed(2)} points with ${changes.length} slot ${changes.length === 1 ? "change" : "changes"}, compared with ${lineup.currentProjectedPoints.toFixed(2)} for your current lineup.`,
+      summary: lineup.totalsScope
+        ? `Partial projected totals are ${lineup.optimalProjectedPoints.toFixed(2)} points with ${changes.length} slot ${changes.length === 1 ? "change" : "changes"}, compared with ${lineup.currentProjectedPoints.toFixed(2)} for your current lineup. Locked players without a forecast are excluded.`
+        : `The model projects ${lineup.optimalProjectedPoints.toFixed(2)} points with ${changes.length} slot ${changes.length === 1 ? "change" : "changes"}, compared with ${lineup.currentProjectedPoints.toFixed(2)} for your current lineup.`,
       detail: [
         snapshot.provenance.projectionFreshness.label,
         "Review the complete lineup plan together; individual slot changes can depend on each other.",
