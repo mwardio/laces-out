@@ -1,3 +1,5 @@
+import { requireCorrectedRosDefenseEvidence } from "./ros-historical-defense-evidence.js";
+
 import {
   FIRST_PARTY_ROS_CONVERGENCE_REFERENCE_SCENARIOS,
   FIRST_PARTY_ROS_DEFAULT_SCENARIOS,
@@ -49,6 +51,14 @@ export async function replayRosHistoricalCorpus(input: {
   const corpus = snapshotRosHistoricalCorpus(input.corpus);
   const definition = rosProfileDefinitionFromKey(projectionScoringProfileKey(input.scoringProfile));
   const scoringProfile = definition.profile;
+  requireCorrectedRosDefenseEvidence({
+    positions: [
+      ...corpus.options.positions,
+      ...corpus.forecasts.map((row) => row.forecast.position),
+    ],
+    evidence: corpus,
+    scoringProfile,
+  });
   const score = (
     row: RosHistoricalCorpusForecast,
     strategy: "contextual" | "availability-aware-recency",

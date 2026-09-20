@@ -26,7 +26,7 @@ import {
   FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
 } from "./first-party-ros-validation-contract.js";
 
-const constants = firstPartyRosAdmissionConstants();
+const constants = firstPartyRosAdmissionConstants(rosScoringProfile("full-ppr").profile);
 
 function sourceAudit(season: number): Record<string, unknown> {
   return {
@@ -113,6 +113,8 @@ function validReport(overrides: {
       : constants.scoringProfileKey;
   const policy = overrides.publicationPolicy ?? publicationPolicy(scoringProfileKey);
   return {
+    actualDefinitionVersion: "observed-weekly-components-complete-v1",
+    pointsAllowedDefinition: "yahoo-2022-v1",
     report: {
       state: "evidence-ready",
       blockers: [],
@@ -208,6 +210,22 @@ describe("validateFirstPartyRosAdmission", () => {
         artifactChecksum: result.artifactChecksum,
       }),
     ).toBe(true);
+  });
+
+  it("rejects an otherwise admissible stale or mismatched defense evidence report", () => {
+    for (const changed of [
+      { actualDefinitionVersion: undefined },
+      { pointsAllowedDefinition: undefined },
+      { pointsAllowedDefinition: "espn-2019-v1" },
+    ]) {
+      const result = validateFirstPartyRosAdmission({
+        report: { ...validReport({}), ...changed },
+        evidenceThroughSeason: 2025,
+        constants,
+      });
+      expect(result.state).toBe("rejected");
+      expect(result.blockers).toContain("corrected_defense_historical_evidence_required");
+    }
   });
 
   it("admits the smaller valid ESPN-shaped N=8 release population", () => {
@@ -511,8 +529,8 @@ describe("firstPartyRosAdmissionConstants scoring-profile parameter", () => {
     );
   });
 
-  it("reproduces the historical profile from the shared catalog", () => {
-    expect(rosScoringProfile("full-ppr").scoringProfileKey).toBe(
+  it("keeps corrected provider scoring distinct from the legacy historical identity", () => {
+    expect(rosScoringProfile("full-ppr").scoringProfileKey).not.toBe(
       projectionScoringProfileKey(HISTORICAL_ROS_SCORING_PROFILE),
     );
   });

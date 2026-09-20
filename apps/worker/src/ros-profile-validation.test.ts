@@ -84,6 +84,74 @@ describe("automatic exact ROS profile validation", () => {
     },
   };
 
+  it("keeps missing corrected defense proof retriable without invalidating league settings", async () => {
+    for (const report of [
+      { ...validReport({}), actualDefinitionVersion: undefined },
+      {
+        state: "blocked-before-modeling",
+        scoringProfile: { digest: rosScoringProfile("full-ppr").digest },
+        historicalEvidence: {
+          state: "unavailable",
+          reason: "corrected_defense_historical_evidence_required",
+        },
+      },
+    ]) {
+      const test = setup();
+      test.runner.mockResolvedValue(report);
+      await test.service.validateProfile(test.job, test.context);
+      expect(test.record()).toMatchObject({
+        state: "withheld",
+        blockers: ["historical_component_coverage_incomplete"],
+      });
+      expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
+      expect(test.record().blockers).not.toContain("scoring_profile_definition_invalid");
+    }
+  });
+
+  it("accepts a pinned unavailable-evidence diagnostic and rejects another corpus", async () => {
+    for (const matches of [true, false]) {
+      const test = setup();
+      const corpusIdentity = "a".repeat(64);
+      const service = new RosProfileValidationService({
+        repository: { ...test.repository, deferForCorpus: vi.fn(async () => {}) },
+        runner: test.runner,
+        enqueueProjectionRefresh: test.enqueueProjectionRefresh,
+        sharedCorpus: async () => ({ requestIdentity: "b".repeat(64), corpusIdentity }),
+      });
+      test.runner.mockResolvedValue({
+        state: "blocked-before-modeling",
+        outcomeCorpusIdentity: matches ? corpusIdentity : "c".repeat(64),
+        scoringProfile: { digest: rosScoringProfile("full-ppr").digest },
+        historicalEvidence: { reason: "corrected_defense_historical_evidence_required" },
+      });
+      if (matches) {
+        await service.validateProfile(test.job, test.context);
+        expect(test.record()).toMatchObject({
+          state: "withheld",
+          blockers: ["historical_component_coverage_incomplete"],
+        });
+      } else {
+        await expect(service.validateProfile(test.job, test.context)).rejects.toThrow(
+          /different ready corpus/,
+        );
+        expect(test.completions).toHaveLength(0);
+      }
+      expect(test.enqueueProjectionRefresh).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not mask stale report execution identities with missing defense provenance", async () => {
+    const test = setup();
+    test.runner.mockResolvedValue({
+      ...validReport({ championOverrides: { modelVersion: "wrong-model" } }),
+      actualDefinitionVersion: undefined,
+    });
+    await expect(test.service.validateProfile(test.job, test.context)).rejects.toThrow(
+      /model_version_mismatch/,
+    );
+    expect(test.completions).toHaveLength(0);
+  });
+
   it("defers an initial profile without running a proof while shared data prepares", async () => {
     const test = setup();
     const deferForCorpus = vi.fn(async () => {});

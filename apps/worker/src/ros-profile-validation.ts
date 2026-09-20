@@ -1,3 +1,5 @@
+import { ROS_CORRECTED_DEFENSE_EVIDENCE_BLOCKER } from "./ros-historical-defense-evidence.js";
+
 import {
   firstPartyRosChampionArtifacts,
   firstPartyRosProfileValidations,
@@ -498,6 +500,22 @@ export class RosProfileValidationService {
         report.outcomeCorpusIdentity !== requiredReadyCorpusIdentity
       )
         throw new Error("ROS recovery returned a different ready corpus identity");
+      if (
+        report.state === "blocked-before-modeling" &&
+        object(report.historicalEvidence) &&
+        report.historicalEvidence.reason === ROS_CORRECTED_DEFENSE_EVIDENCE_BLOCKER &&
+        object(report.scoringProfile) &&
+        report.scoringProfile.digest === definition.digest
+      ) {
+        await this.repository.complete({
+          id: record.id,
+          startedAt,
+          completedAt: this.now(),
+          report: recordedReport(report),
+          blockers: ["historical_component_coverage_incomplete"],
+        });
+        return;
+      }
       if (report.state === "blocked-before-modeling" && report.componentPreflight !== undefined) {
         if (!validComponentEvidenceBlock(report, record, constants))
           throw new Error("ROS component preflight report failed its execution identity contract");
@@ -534,6 +552,25 @@ export class RosProfileValidationService {
         constants,
       });
       if (admission.state === "rejected") {
+        if (
+          admission.blockers.length === 1 &&
+          admission.blockers.includes(ROS_CORRECTED_DEFENSE_EVIDENCE_BLOCKER)
+        ) {
+          await this.repository.complete({
+            id: record.id,
+            startedAt,
+            completedAt: this.now(),
+            report: recordedReport({
+              ...report,
+              historicalEvidence: {
+                state: "unavailable",
+                reason: ROS_CORRECTED_DEFENSE_EVIDENCE_BLOCKER,
+              },
+            }),
+            blockers: ["historical_component_coverage_incomplete"],
+          });
+          return;
+        }
         if (admission.blockers.some((blocker) => !STATISTICAL_ADMISSION_BLOCKERS.has(blocker))) {
           throw new Error(
             `ROS profile validator report failed its execution identity contract: ${admission.blockers.join(", ")}`,

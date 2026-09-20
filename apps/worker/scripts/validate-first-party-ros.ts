@@ -13,6 +13,10 @@ import {
 
 import path from "node:path";
 import {
+  ROS_CORRECTED_DEFENSE_EVIDENCE_BLOCKER,
+  ROS_CORRECTED_DEFENSE_EVIDENCE_MESSAGE,
+} from "../src/ros-historical-defense-evidence.js";
+import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_OUTCOME_SCHEMA_VERSION,
   type FirstPartyRosPosition,
@@ -204,6 +208,32 @@ async function main(): Promise<void> {
     heldOutSeasons.some((season) => seasons.filter((candidate) => candidate < season).length < 3)
   ) {
     throw new Error("Every holdout requires at least three earlier source seasons");
+  }
+
+  if (
+    (positions ?? HISTORICAL_ROS_SUPPORTED_POSITIONS).includes("DST") &&
+    !process.argv.includes("--preflight-only")
+  ) {
+    // Do not spend hours rebuilding evidence with the retained legacy actual builder.
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          state: "blocked-before-modeling",
+          noSimulation: true,
+          ...(replayCorpus ? { outcomeCorpusIdentity: replayCorpus } : {}),
+          scoringProfile: { key: scoringProfile.key, digest: scoringProfile.digest },
+          historicalEvidence: {
+            state: "unavailable",
+            reason: ROS_CORRECTED_DEFENSE_EVIDENCE_BLOCKER,
+            message: ROS_CORRECTED_DEFENSE_EVIDENCE_MESSAGE,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    process.exitCode = 1;
+    return;
   }
 
   if (replayCorpus) {

@@ -1,3 +1,5 @@
+import { requireCorrectedRosDefenseEvidence } from "./ros-historical-defense-evidence.js";
+
 import { createHash } from "node:crypto";
 
 import {
@@ -2432,6 +2434,8 @@ export async function buildHistoricalRosBacktest(
   input: HistoricalRosBacktestInput,
 ): Promise<HistoricalRosBacktestResult> {
   const options = resolveOptions(input.options);
+  // The legacy actual builder cannot attest corrected provider-specific defense outcomes.
+  requireCorrectedRosDefenseEvidence({ positions: options.positions });
   const evaluateProjection = input.projectionEvaluator ?? simulateHistoricalProjection;
   const includedPositions = new Set(options.positions);
   const includesPlayers = options.positions.some((position) => position !== "DST");

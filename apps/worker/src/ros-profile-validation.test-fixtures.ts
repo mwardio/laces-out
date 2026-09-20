@@ -11,7 +11,7 @@ import {
   FIRST_PARTY_ROS_RELEASE_MINIMUM_FORECASTS,
   FIRST_PARTY_ROS_RELEASE_PLAYERS_PER_POSITION,
 } from "./first-party-ros-validation-contract.js";
-export const constants = firstPartyRosAdmissionConstants();
+export const constants = firstPartyRosAdmissionConstants(rosScoringProfile("full-ppr").profile);
 
 export function componentBlockedReport(): Record<string, unknown> {
   const profile = rosScoringProfile("full-ppr");
@@ -139,6 +139,8 @@ export function validReport(overrides: {
       : constants.scoringProfileKey;
   const policy = publicationPolicy(scoringProfileKey);
   return {
+    actualDefinitionVersion: "observed-weekly-components-complete-v1",
+    pointsAllowedDefinition: "yahoo-2022-v1",
     report: {
       state: "evidence-ready",
       blockers: [],

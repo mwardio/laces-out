@@ -4,6 +4,7 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   projectionScoringProfileKey,
+  rosProfileDefinitionFromKey,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
 
@@ -22,6 +23,11 @@ import {
   type FirstPartyRosChampionArtifactPayload,
 } from "./first-party-ros-publication.js";
 import { firstPartyRosReleaseValidationBlockers } from "./first-party-ros-validation-contract.js";
+
+import {
+  requireCorrectedRosDefenseEvidence,
+  ROS_CORRECTED_DEFENSE_EVIDENCE_BLOCKER,
+} from "./ros-historical-defense-evidence.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
@@ -137,6 +143,17 @@ export function validateFirstPartyRosAdmission(input: {
     return { state: "rejected", blockers: [...blockers, "report_not_object"] };
   }
   const report = input.report;
+  // Every admissible release is a full portfolio, including D/ST. Reports predating
+  // corrected actual provenance cannot bypass the guarded generation/replay paths.
+  try {
+    requireCorrectedRosDefenseEvidence({
+      positions: ["DST"],
+      evidence: report,
+      scoringProfile: rosProfileDefinitionFromKey(constants.scoringProfileKey).profile,
+    });
+  } catch {
+    blockers.push(ROS_CORRECTED_DEFENSE_EVIDENCE_BLOCKER);
+  }
 
   // Position-only replays are evidence inputs for composing a complete report, never admissible
   // release artifacts by themselves. Older complete reports predate this explicit scope and remain
