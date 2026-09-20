@@ -179,7 +179,7 @@ export async function readPinnedRosDerivedArtifact(
     await handle.close();
   }
 }
-function corpusScope(corpus: RosHistoricalCorpus, training: boolean): void {
+export function verifyRosDerivedCorpusScope(corpus: RosHistoricalCorpus, training: boolean): void {
   assert.equal(corpus.forecasts.length, training ? 2176 : 3264);
   assert.equal(corpus.options.playersPerPosition, training ? 32 : 8);
   assert.equal(corpus.options.maximumForecasts, 6000);
@@ -295,7 +295,7 @@ export async function loadVerifiedRosDerivedPackage(options: {
     manifest.originalPreviousPhysicalCorpus,
   );
   assert.equal(originalEnvelope.identity, manifest.originalPreviousPhysicalCorpus);
-  corpusScope(original, false);
+  verifyRosDerivedCorpusScope(original, false);
   const referenceEnvelope = object(get("originalReference")),
     reference = object(referenceEnvelope.payload);
   assert.equal(reference.version, "ros-compatible-reference-corpus-v1");
@@ -305,7 +305,11 @@ export async function loadVerifiedRosDerivedPackage(options: {
     rosDerivedDocumentChecksum(originalCandidate),
     manifest.originalCandidatePhysicalCorpus,
   );
-  corpusScope(originalCandidate, false);
+  verifyRosDerivedCorpusScope(originalCandidate, false);
+  assert.equal(
+    object(reference.generation).originalCorpusIdentity,
+    manifest.originalPreviousPhysicalCorpus,
+  );
   const originalRecords = list(reference.records, 6528) as readonly RosDerivedOutcomeRecord[];
   const originalById = new Map(original.forecasts.map((row) => [id(row), row]));
   const oldCandidateById = new Map(originalCandidate.forecasts.map((row) => [id(row), row]));
@@ -358,7 +362,20 @@ export async function loadVerifiedRosDerivedPackage(options: {
   assert.equal(fragment.canAuthorizeRelease, false);
   assert.equal(fragment.isNativeCorpus, false);
   checkPins(fragment.proofPins);
+  same(
+    fragment.originalSourceAudit,
+    originalCandidate.sourceAudit,
+    "Certified original source audit changed",
+  );
+  same(
+    fragment.originalSourceChecksums,
+    originalCandidate.sourceChecksums,
+    "Certified original source checksums changed",
+  );
+  same(fragment.coverage, originalCandidate.coverage, "Certified original coverage changed");
+  same(fragment.seasons, originalCandidate.seasons, "Certified original seasons changed");
   const certification = object(get("playerCertification"));
+  assert.equal(certification.version, "corrected-source-nondst-functional-equivalence-v1");
   assert.equal(
     certification.state,
     "non-dst-physical-input-and-observed-window-equivalence-established",
@@ -425,6 +442,8 @@ export async function loadVerifiedRosDerivedPackage(options: {
     );
     assert.equal(equivalent.canonicalCompleteInputSha256, vector.currentCanonicalFullInputSha256);
     assert.equal(equivalent.originalFileSha256, vector.originalFileSha256);
+    assert.equal(equivalent.originalFile, vector.originalCacheFile);
+    assert.equal(equivalent.originalManifestChecksum, vector.originalManifestChecksum);
     assert.equal(equivalent.seedHash, object(vector.originalProvenance).seedHash);
   }
   const trainingEnvelope = object(get("nativeDstCorpus"));
@@ -436,7 +455,7 @@ export async function loadVerifiedRosDerivedPackage(options: {
     requireRosHistoricalPointsAllowedDefinition(training),
     manifest.pointsAllowedDefinition,
   );
-  corpusScope(training, true);
+  verifyRosDerivedCorpusScope(training, true);
   same(training.sourceAudit, manifest.observedSources, "Current native source audit");
   same(training.options.heldOutSeasons, original.options.heldOutSeasons, "Shared heldout years");
   const trainingById = new Map(training.forecasts.map((row) => [id(row), row]));

@@ -17,6 +17,11 @@ import {
 
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const MAX_ARTIFACT = 128 * 1_024 * 1_024;
+export interface RosDerivedPreparationProgress {
+  readonly stage: "artifact-copy" | "proof-graph" | "physical-closure" | "ready-manifest";
+  readonly artifactsCopied: number;
+  readonly physicalVectorsVerified: number;
+}
 
 /** A pin builder, not qualification authority; every referenced artifact must already exist. */
 export function createRosDerivedProductionPackage(input: RosDerivedProductionPackage) {
@@ -90,6 +95,7 @@ export async function prepareRosDerivedProductionPackage(options: {
   readonly sourceRoots: RosDerivedSourceRoots;
   readonly lock: RosCorpusLock;
   readonly signal: AbortSignal;
+  readonly onProgress?: (event: RosDerivedPreparationProgress) => void;
 }): Promise<string> {
   const packageJson = options.packageJson;
   const packageChecksum = options.packageChecksum;
@@ -114,7 +120,10 @@ export async function prepareRosDerivedProductionPackage(options: {
     await mkdir(target, { recursive: true, mode: 0o700 });
     await mkdir(ready, { recursive: true, mode: 0o700 });
     let total = 0;
+    const progress = (stage: RosDerivedPreparationProgress["stage"], physicalVectorsVerified = 0) =>
+      options.onProgress?.({ stage, artifactsCopied: copied.size, physicalVectorsVerified });
     const copied = new Set<string>();
+    progress("artifact-copy");
     for (const [logicalPath, file] of Object.entries(manifest.files)) {
       const source = artifacts[logicalPath]!;
       const bytes = await readPinnedRosDerivedArtifact(
@@ -129,8 +138,10 @@ export async function prepareRosDerivedProductionPackage(options: {
       if (!copied.has(file.filename)) {
         await immutableWrite(target, file.filename, bytes, guard);
         copied.add(file.filename);
+        progress("artifact-copy");
       }
     }
+    progress("proof-graph");
     const verified = await loadVerifiedRosDerivedPackage({
       directory,
       unpublishedPackageJson: packageJson,
@@ -151,6 +162,7 @@ export async function prepareRosDerivedProductionPackage(options: {
       { corpus: verified.training, cache: verified.trainingCache, dstOnly: false },
     ];
     let read = 0;
+    progress("physical-closure");
     for (const { corpus, cache, dstOnly } of populations)
       for (const row of corpus.forecasts) {
         if (dstOnly && row.forecast.position !== "DST") continue;
@@ -161,10 +173,14 @@ export async function prepareRosDerivedProductionPackage(options: {
             signal: guard.signal,
           });
           assert.equal(result.state, "hit", "Missing retained derived vector");
-          if (++read % 32 === 0) await guard.assertHeld();
+          if (++read % 32 === 0) {
+            await guard.assertHeld();
+            progress("physical-closure", read);
+          }
         }
       }
     assert.equal(read, 11_968, "Complete unique physical vector closure required");
+    progress("ready-manifest", read);
     await immutableWrite(ready, `${packageChecksum}.json`, Buffer.from(packageJson), guard);
     await guard.assertHeld();
     return packageChecksum;

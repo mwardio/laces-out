@@ -14,6 +14,8 @@ export default defineConfig({
     "first-party-projection-process-entry": "src/first-party-projection-process-entry.ts",
     "adopt-ros-shared-corpus": "scripts/adopt-ros-shared-corpus.ts",
     "prepare-ros-derived-package": "scripts/prepare-ros-derived-package.ts",
+    "replay-ros-derived-canary": "scripts/replay-ros-derived-canary.ts",
+    "inventory-ros-derived-dst": "scripts/inventory-ros-derived-dst.ts",
     "ros-bootstrap-health": "scripts/ros-bootstrap-health.ts",
   },
   format: ["esm"],

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { rosDerivedOperatorDiagnostic } from "../src/ros-derived-operator-diagnostic.js";
 import { loadEnvironment } from "@laces-out/config";
 import { createPostgresRosCorpusLock } from "../src/ros-corpus-lock.js";
 import { prepareRosDerivedProductionPackage } from "../src/ros-derived-package-prepare.js";
@@ -12,6 +13,7 @@ async function main(): Promise<void> {
   const interrupt = () => controller.abort(new Error("Derived package preparation interrupted"));
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", interrupt);
+  let stage = "arguments";
   try {
     const args = process.argv.slice(2);
     assert(
@@ -21,6 +23,7 @@ async function main(): Promise<void> {
     const filename = args[0]!.slice("--config=".length),
       checksum = args[1]!.slice("--sha256=".length);
     assert(path.isAbsolute(filename) && path.resolve(filename) === filename);
+    stage = "configuration-bytes";
     const bytes = await readPinnedRosDerivedArtifact(
       path.dirname(filename),
       path.basename(filename),
@@ -28,6 +31,7 @@ async function main(): Promise<void> {
       4 * 1_024 * 1_024,
       controller.signal,
     );
+    stage = "configuration-envelope";
     const config = JSON.parse(
       new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     ) as Parameters<typeof prepareRosDerivedProductionPackage>[0] & { version: string };
@@ -36,8 +40,11 @@ async function main(): Promise<void> {
       ["version", "directory", "packageJson", "packageChecksum", "artifacts", "sourceRoots"].sort(),
     );
     assert.equal(config.version, "ros-derived-package-preparation-v1");
+    stage = "package-envelope";
     parseRosDerivedProductionPackage(config.packageJson, config.packageChecksum);
+    stage = "environment";
     const environment = loadEnvironment();
+    stage = "shared-lock";
     const packageChecksum = await prepareRosDerivedProductionPackage({
       directory: config.directory,
       packageJson: config.packageJson,
@@ -46,14 +53,20 @@ async function main(): Promise<void> {
       sourceRoots: config.sourceRoots,
       signal: controller.signal,
       lock: createPostgresRosCorpusLock(environment.DATABASE_URL),
+      onProgress(event) {
+        stage = event.stage;
+        process.stderr.write(
+          `${JSON.stringify({ state: "preparing-derived-package", ...event })}\n`,
+        );
+      },
     });
     process.stdout.write(
       `${JSON.stringify({ state: "derived-package-ready", packageChecksum, physicalVectorsVerified: 11968, noSimulation: true, canAuthorizeRelease: false })}\n`,
     );
-  } catch {
+  } catch (error) {
     // Keep database connection strings and artifact paths out of operator logs.
     process.stderr.write(
-      `${JSON.stringify({ state: controller.signal.aborted ? "interrupted" : "failed", reason: "Derived preparation requires an exact pinned config, retained artifacts and physical vectors, disk headroom, and the shared database lock." })}\n`,
+      `${JSON.stringify({ state: controller.signal.aborted ? "interrupted" : "failed", ...rosDerivedOperatorDiagnostic(error, stage) })}\n`,
     );
     process.exitCode = controller.signal.aborted ? 130 : 1;
   } finally {

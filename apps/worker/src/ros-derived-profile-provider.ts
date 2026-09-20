@@ -5,7 +5,10 @@ import {
   type FirstPartyRosOutcomeScore,
   type ProjectionDefensePointsAllowedDefinition,
 } from "@laces-out/projections";
-import { historicalRosChecksum } from "./first-party-ros-backtest.js";
+import {
+  historicalRosChecksum,
+  type HistoricalRosBacktestProgress,
+} from "./first-party-ros-backtest.js";
 import {
   rosHistoricalProfilePointsAllowedDefinition,
   type RosHistoricalCorpus,
@@ -51,6 +54,12 @@ export function createRosDerivedProfileProvider(options: {
     Readonly<Record<ProjectionDefensePointsAllowedDefinition, string>>
   >;
   readonly sourceRoots: RosDerivedSourceRoots;
+  readonly onProgress?: (
+    event: HistoricalRosBacktestProgress & {
+      readonly population:
+        "original-candidate" | "original-previous" | "training" | "candidate" | "previous";
+    },
+  ) => void;
 }) {
   const pins = { ...options.packageChecksums };
   const roots = {
@@ -106,10 +115,12 @@ export function createRosDerivedProfileProvider(options: {
         return verified;
       } catch (error) {
         signal.throwIfAborted();
-        throw new RosMarginalDependencyError({
+        const dependencyError = new RosMarginalDependencyError({
           dependency: "bundle",
           reason: (error as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "corrupt",
         });
+        Object.defineProperty(dependencyError, "cause", { value: error });
+        throw dependencyError;
       } finally {
         loading.delete(definition);
       }
@@ -170,13 +181,32 @@ export function createRosDerivedProfileProvider(options: {
         request: RosDerivedPopulationReplayInput,
       ) {
         try {
-          return await replayRosDerivedPopulation(request);
+          const population = request.originalDstObservedSemantics
+            ? request.retainedV12
+              ? "original-previous"
+              : "original-candidate"
+            : dependency === "training"
+              ? "training"
+              : request.retainedV12
+                ? "previous"
+                : "candidate";
+          return await replayRosDerivedPopulation({
+            ...request,
+            ...(options.onProgress
+              ? {
+                  onProgress: (event: HistoricalRosBacktestProgress) =>
+                    options.onProgress?.({ ...event, population }),
+                }
+              : {}),
+          });
         } catch (error) {
           input.signal.throwIfAborted();
-          throw new RosMarginalDependencyError({
+          const dependencyError = new RosMarginalDependencyError({
             dependency,
             reason: (error as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : "corrupt",
           });
+          Object.defineProperty(dependencyError, "cause", { value: error });
+          throw dependencyError;
         }
       }
       const originalCandidate = await replay("candidate", {
