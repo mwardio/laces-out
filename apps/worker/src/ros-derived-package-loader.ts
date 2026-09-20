@@ -25,6 +25,7 @@ import {
   type RosDerivedOutcomeSource,
 } from "./ros-derived-outcome-cache.js";
 import { createRosDerivedRetainedOutcomeCache } from "./ros-derived-retained-cache.js";
+import { completeVerifiedEmptyRosPlayerLabels } from "./ros-derived-empty-player-labels.js";
 import {
   parseRosDerivedProductionPackage,
   type RosDerivedProductionPackage,
@@ -421,6 +422,21 @@ export async function loadVerifiedRosDerivedPackage(options: {
     for (const [name, value] of Object.entries(originalRow.actualComponents))
       assert.equal(row.actualComponents[name], value);
   }
+  const certifiedProof = (basename: string): unknown => {
+    const paths = Object.keys(object(certification.pins)).filter(
+      (logicalPath) => path.basename(logicalPath) === basename,
+    );
+    assert.equal(paths.length, 1, `Unique certified proof required: ${basename}`);
+    return documents.get(paths[0]!);
+  };
+  const completedPlayers = completeVerifiedEmptyRosPlayerLabels({
+    forecasts: correctedPlayers,
+    corpus: originalCandidate,
+    certification,
+    zeroEvidence: certifiedProof("zero-production-evidence.json"),
+    actualVerification: certifiedProof("current-actuals-verification.json"),
+  });
+  const completedPlayerById = new Map(completedPlayers.map((row) => [id(row), row]));
   const equivalence = object(get("equivalentPhysicalInputs"));
   assert.equal(equivalence.version, "current-input-functional-equivalence-map-v1");
   const equivalentById = new Map(
@@ -550,7 +566,9 @@ export async function loadVerifiedRosDerivedPackage(options: {
   );
   const candidateRows = originalCandidate.forecasts.map((row) => {
     const next =
-      row.forecast.position === "DST" ? trainingById.get(id(row)) : correctedById.get(id(row));
+      row.forecast.position === "DST"
+        ? trainingById.get(id(row))
+        : completedPlayerById.get(id(row));
     assert(next);
     assert.equal(next.actualGames, row.actualGames);
     assert.equal(next.scheduledGames, row.scheduledGames);
@@ -589,7 +607,7 @@ export async function loadVerifiedRosDerivedPackage(options: {
     forecasts: corpus.forecasts.map((row) =>
       row.forecast.position === "DST"
         ? row
-        : { ...row, actualComponents: correctedById.get(id(row))!.actualComponents },
+        : { ...row, actualComponents: completedPlayerById.get(id(row))!.actualComponents },
     ),
   });
   return {

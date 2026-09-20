@@ -60,3 +60,18 @@ it("preserves a dependency wrapper's safe root cause without forwarding private 
     "private",
   );
 });
+
+it("identifies incomplete historical labels without forwarding player identifiers or stat values", () => {
+  const cause = new TypeError(
+    "ROS historical actual components unavailable for private-player at 2022:5; missing=private-stat; invalid=private-value",
+  );
+  const diagnostic = rosDerivedOperatorDiagnostic(
+    new Error("dependency corrupt", { cause }),
+    "physical-replay",
+  );
+  expect(diagnostic).toMatchObject({
+    reason: "ROS historical actual components unavailable",
+    code: "operation_failed",
+  });
+  expect(JSON.stringify(diagnostic)).not.toContain("private");
+});
