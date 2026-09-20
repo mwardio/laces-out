@@ -3730,8 +3730,7 @@ function defenseRecencyWeight(
   target: FirstPartyTeamDefenseTarget,
   halfLife: number,
 ): number {
-  const distance = Math.max(1, ordinal(target.season, target.week) - defenseOrdinal(row));
-  return 0.5 ** (distance / halfLife);
+  return recencyWeight(row, target, halfLife);
 }
 
 function weightedDefenseMean(
