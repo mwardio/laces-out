@@ -359,6 +359,8 @@ export interface InSeasonDecisionRepository {
   listProjectionScheduleGames?(season: number): Promise<readonly WeeklyCoverageGame[]>;
   /** A positive schedule match is required before retaining a near-tied current lineup. */
   listLineupScheduledTeams?(season: number, week: number): Promise<readonly string[]>;
+  /** Conservative lineup locks from the current admitted NFL schedule, independently of providers. */
+  listLineupStartedTeams?(season: number, week: number, now: Date): Promise<readonly string[]>;
   findProviderProjectionSnapshot?(
     leagueSeasonId: string,
     week: number,
@@ -454,6 +456,22 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
   }
 
   async listLineupScheduledTeams(season: number, week: number): Promise<readonly string[]> {
+    return this.#listLineupTeams(season, week);
+  }
+
+  async listLineupStartedTeams(
+    season: number,
+    week: number,
+    now: Date,
+  ): Promise<readonly string[]> {
+    return this.#listLineupTeams(season, week, now);
+  }
+
+  async #listLineupTeams(
+    season: number,
+    week: number,
+    startedBefore?: Date,
+  ): Promise<readonly string[]> {
     const games = await this.#database
       .select({
         homeTeam: nflScheduleObservations.homeTeam,
@@ -476,6 +494,15 @@ export class DrizzleInSeasonDecisionRepository implements InSeasonDecisionReposi
           eq(nflScheduleObservations.seasonType, "REG"),
           ne(nflScheduleObservations.status, "cancelled"),
           ne(nflScheduleObservations.status, "postponed"),
+          ...(startedBefore
+            ? [
+                or(
+                  eq(nflScheduleObservations.status, "in-progress"),
+                  eq(nflScheduleObservations.status, "final"),
+                  lte(nflScheduleObservations.kickoffAt, startedBefore),
+                ),
+              ]
+            : []),
         ),
       )
       .limit(32);
@@ -2506,6 +2533,7 @@ export class InSeasonDecisionService {
     userId: string,
     leagueId: string,
     visibility: DecisionProjectionVisibility = "actor",
+    allowLockedProjectionGaps = false,
   ): Promise<DecisionFactsResult> {
     const membership = await this.#repository.findMembership(userId, leagueId);
     if (!membership) return { kind: "no-membership" };
@@ -2543,6 +2571,7 @@ export class InSeasonDecisionService {
       projectionSetRows,
       availabilityRows,
       lineupScheduledTeams,
+      lineupStartedTeams,
     ] = await Promise.all([
       this.#repository.listTeams(season.id, MAX_TEAMS + 1),
       this.#repository.listSlotRules(season.id, MAX_SLOT_RULES + 1),
@@ -2561,6 +2590,9 @@ export class InSeasonDecisionService {
       season.currentWeek !== null && this.#repository.listLineupScheduledTeams
         ? this.#repository.listLineupScheduledTeams(season.season, season.currentWeek)
         : Promise.resolve(null),
+      season.currentWeek !== null && this.#repository.listLineupStartedTeams
+        ? this.#repository.listLineupStartedTeams(season.season, season.currentWeek, now)
+        : Promise.resolve([]),
     ]);
     const projectionSet = projectionSetRows.find(
       (row) =>
@@ -2669,7 +2701,13 @@ export class InSeasonDecisionService {
       snapshotRows.map((snapshot) => snapshot.id),
       MAX_ROSTER_ENTRIES + 1,
     );
-    const boundedRosterRows = rosterRows.slice(0, MAX_ROSTER_ENTRIES);
+    const startedTeams = new Set(lineupStartedTeams.map(canonicalNflTeamCode));
+    const storedRosterRows = rosterRows.slice(0, MAX_ROSTER_ENTRIES);
+    const boundedRosterRows = storedRosterRows.map((row) =>
+      !row.locked && row.nflTeam && startedTeams.has(canonicalNflTeamCode(row.nflTeam))
+        ? { ...row, locked: true }
+        : row,
+    );
     const entriesBySnapshot = new Map<string, DecisionRosterEntryRow[]>();
     for (const entry of boundedRosterRows) {
       const current = entriesBySnapshot.get(entry.snapshotId) ?? [];
@@ -2890,7 +2928,7 @@ export class InSeasonDecisionService {
       },
       providerVerification: providerVerification(
         season.provider,
-        boundedRosterRows.filter((entry) => entry.locked).length,
+        storedRosterRows.filter((entry) => entry.locked).length,
       ),
       coverage: {
         leagueTeams: teamRows.length,
@@ -2960,11 +2998,20 @@ export class InSeasonDecisionService {
     const activeRosterProjected = activeRoster.filter((player) =>
       projectionById.has(player.id),
     ).length;
+    const lockedPlayerIds = new Set(
+      claimedRosterRows.filter((entry) => entry.locked).map((entry) => entry.playerId),
+    );
     if (!projectionSet) {
       sharedReasons.push(
         reason("PROJECTIONS_MISSING", projectionsMissingMessage(season, managedProfile)),
       );
-    } else if (activeRosterProjected !== activeRoster.length) {
+    } else if (
+      activeRoster.some(
+        (player) =>
+          !projectionById.has(player.id) &&
+          (!allowLockedProjectionGaps || !lockedPlayerIds.has(player.id)),
+      )
+    ) {
       sharedReasons.push(
         reason(
           "PROJECTION_COVERAGE_INCOMPLETE",
@@ -3025,7 +3072,12 @@ export class InSeasonDecisionService {
     leagueId: string,
     options: { readonly visibility?: DecisionProjectionVisibility } = {},
   ): Promise<InSeasonDecisionSnapshot | undefined> {
-    const loaded = await this.#loadDecisionFacts(userId, leagueId, options.visibility ?? "actor");
+    const loaded = await this.#loadDecisionFacts(
+      userId,
+      leagueId,
+      options.visibility ?? "actor",
+      true,
+    );
     if (loaded.kind === "no-membership") return undefined;
     if (loaded.kind === "unavailable") return loaded.snapshot;
     const workCheckpoint = createDecisionWorkCheckpoint();
@@ -3065,6 +3117,22 @@ export class InSeasonDecisionService {
     const ordinaryRoster = ordinaryRosterModel(userRoster, claimedRosterRows, slots);
     const activeRoster = ordinaryRoster.roster;
     const activePlayerIds = new Set<string>(activeRoster.map((player) => player.id));
+    // Only fixed starter/bench entries may lack a projection. They cannot affect the choice
+    // between movable players; roster valuation still requires complete coverage below.
+    const missingLockedProjections = activeRoster.filter(
+      (player) => !projectionById.has(player.id),
+    );
+    const missingLockedStarterProjections = missingLockedProjections.filter((player) =>
+      claimedRosterRows.some((entry) => entry.playerId === player.id && entry.isStarter),
+    );
+    const rosterValuationCoverageReasons = missingLockedProjections.length
+      ? [
+          reason(
+            "PROJECTION_COVERAGE_INCOMPLETE",
+            `Roster valuation needs compatible projections for the locked players: ${missingLockedProjections.map((player) => player.name).join(", ")}.`,
+          ),
+        ]
+      : [];
     const limitedConfidencePlayers = activeRoster
       .filter((player) => projectionHasLimitedConfidence(projectionById.get(player.id)))
       .map((player) => player.name)
@@ -3107,14 +3175,16 @@ export class InSeasonDecisionService {
         locks,
       };
       const optimum = optimizeLineup(optimizationInput);
-      const currentCanStay = currentStarters.every((entry) =>
-        starterAllowsNearTieRetention({
-          statuses: [entry.status, preparedById.get(entry.playerId)?.player.status],
-          projection: projectionById.get(entry.playerId),
-          scheduled: Boolean(
-            entry.nflTeam && lineupScheduledTeams?.includes(canonicalNflTeamCode(entry.nflTeam)),
-          ),
-        }),
+      const currentCanStay = currentStarters.every(
+        (entry) =>
+          entry.locked ||
+          starterAllowsNearTieRetention({
+            statuses: [entry.status, preparedById.get(entry.playerId)?.player.status],
+            projection: projectionById.get(entry.playerId),
+            scheduled: Boolean(
+              entry.nflTeam && lineupScheduledTeams?.includes(canonicalNflTeamCode(entry.nflTeam)),
+            ),
+          }),
       );
       const retention = currentCanStay
         ? preserveCurrentLineupBelowGain(optimizationInput, optimum, {
@@ -3197,11 +3267,17 @@ export class InSeasonDecisionService {
           currentProjectedPoints: rounded(currentProjectedPoints),
           optimalProjectedPoints: rounded(result.projectedPoints),
           projectedGain: rounded(result.projectedPoints - currentProjectedPoints),
+          ...(missingLockedStarterProjections.length > 0
+            ? { totalsScope: "projected-players-only" as const }
+            : {}),
           assignments: result.assignments.map((assignment) => ({
             slotId: assignment.slotId,
             slotLabel: slotById.get(assignment.slotId)?.label ?? assignment.slotId,
             player: decisionPlayer(allPlayerById.get(assignment.playerId)!, projectionById),
             locked: assignment.locked,
+            ...(!projectionById.has(assignment.playerId)
+              ? { projectionUnavailable: true as const }
+              : {}),
           })),
           changes: result.changes.map((change) => ({
             slotId: change.slotId,
@@ -3230,6 +3306,11 @@ export class InSeasonDecisionService {
           })),
           execution,
           notes: [
+            ...(missingLockedProjections.length > 0
+              ? [
+                  `No compatible forecast is available for ${missingLockedProjections.map((player) => player.name).join(", ")}. Their starter or bench locks are preserved; they are excluded from projected totals, and the projected gain compares only players who can still move.`,
+                ]
+              : []),
             ...result.assignments.flatMap(({ playerId }) => {
               const player = allPlayerById.get(playerId);
               const storedStatus = normalizedDecisionStatus(
@@ -3264,7 +3345,7 @@ export class InSeasonDecisionService {
               : []),
             ...(activeRoster.length < userRoster.length ? [RESERVE_ROSTER_NOTE] : []),
             locks.length > 0
-              ? `${locks.length} stored true lock${locks.length === 1 ? " was" : "s were"} preserved; complete provider lock coverage remains unavailable.`
+              ? `${locks.length} stored or game-start lock${locks.length === 1 ? " was" : "s were"} preserved; complete provider lock coverage remains unavailable.`
               : "No stored true locks were present; that does not verify that every player is unlocked at the provider.",
           ],
         };
@@ -3276,7 +3357,9 @@ export class InSeasonDecisionService {
       checksum: null,
       observedAt: null,
     };
-    if (!lineupMappingComplete) {
+    if (rosterValuationCoverageReasons.length > 0) {
+      waivers = unavailable(rosterValuationCoverageReasons);
+    } else if (!lineupMappingComplete) {
       waivers = unavailable([
         reason(
           "SLOT_RULES_UNSUPPORTED",
@@ -3558,7 +3641,9 @@ export class InSeasonDecisionService {
         : [];
     });
     let trades: InSeasonDecisionSnapshot["trades"];
-    if (validOpponents.length === 0) {
+    if (rosterValuationCoverageReasons.length > 0) {
+      trades = unavailable(rosterValuationCoverageReasons);
+    } else if (validOpponents.length === 0) {
       trades = unavailable([
         reason(
           "OPPONENT_DATA_MISSING",
