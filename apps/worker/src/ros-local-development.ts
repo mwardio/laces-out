@@ -7,6 +7,9 @@ import {
   compareMarginalIntervalPortfolio,
   evaluateFirstPartyRosMarginalPolicy,
   evaluateMarginalIntervalEvidence,
+  defensePointsAllowedDefinitionForProfile,
+  isDefensePointsAllowedStatId,
+  rosProfileDefinitionFromKey,
   type FirstPartyRosHeldOutForecast,
   type FirstPartyRosStrategy,
   type MarginalIntervalComparison,
@@ -14,6 +17,7 @@ import {
   type MarginalIntervalComparisonRow,
   type MarginalIntervalEvaluationRow,
   type MarginalRosCandidateEvaluation,
+  type ProjectionDefensePointsAllowedDefinition,
 } from "@laces-out/projections";
 import {
   LOCAL_ROS_DEVELOPMENT_VERSION,
@@ -83,6 +87,8 @@ export interface RosLocalDevelopmentInput {
   readonly rankSidecarChecksum: string;
   readonly specificationText: string;
   readonly specificationChecksum: string;
+  readonly rankAmendmentJson?: string;
+  readonly rankAmendmentChecksum?: string;
 }
 function fail(reason: string): never {
   throw new Error(`Local ROS development: ${reason}`);
@@ -144,6 +150,34 @@ export interface LocalRosRankReportPair {
   readonly candidateReportChecksum: string;
   readonly trainingReportJson: string;
   readonly trainingReportChecksum: string;
+}
+export const CORRECTED_LOCAL_ROS_RANK_SIDECAR_VERSION =
+  "authenticated-provider-full32-historical-rank-sidecar-v2";
+interface CorrectedRankProfile extends RankProfile {
+  readonly originalScoringProfileKey: string;
+  readonly originalScoringProfileDigest: string;
+  readonly comparisonManifestChecksum: string;
+  readonly pointsAllowedDefinition: ProjectionDefensePointsAllowedDefinition;
+  readonly sourceManifestChecksum: string;
+  readonly modelIdentity: LocalRosRankSidecar["modelIdentity"];
+  readonly ranks: LocalRosDefenseRanks;
+}
+export interface CorrectedLocalRosRankSidecar {
+  readonly version: typeof CORRECTED_LOCAL_ROS_RANK_SIDECAR_VERSION;
+  readonly canAuthorizeRelease: false;
+  readonly featureVersion: typeof LOCAL_ROS_DEFENSE_RANK_VERSION;
+  readonly referenceProductionBasis: typeof REFERENCE_PRODUCTION_BASIS;
+  readonly selectionVersion: typeof SELECTION_VERSION;
+  readonly sourceRevision: string;
+  readonly extractorSourceChecksum: string;
+  readonly amendmentChecksum: string;
+  readonly specificationChecksum: string;
+  readonly profiles: readonly CorrectedRankProfile[];
+}
+type AnyLocalRosRankSidecar = LocalRosRankSidecar | CorrectedLocalRosRankSidecar;
+export interface CorrectedLocalRosRankReportPair extends LocalRosRankReportPair {
+  readonly originalScoringProfileKey: string;
+  readonly comparisonManifestChecksum: string;
 }
 function record(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -365,10 +399,200 @@ export function buildLocalRosDefenseRankSidecar(input: {
 function denseArray(value: unknown): boolean {
   return Array.isArray(value) && Object.keys(value).length === value.length;
 }
-function readRankSidecar(text: string, checksum: string): LocalRosRankSidecar {
+function numericRankScoringKey(key: string): string {
+  const rules = rosProfileDefinitionFromKey(key).profile.rules;
+  return canonical(
+    rules.map(({ statDefinition, ...numeric }) => {
+      if (
+        statDefinition !== undefined &&
+        (!isDefensePointsAllowedStatId(numeric.statId) ||
+          (statDefinition !== "yahoo-2022-v1" && statDefinition !== "espn-2019-v1"))
+      )
+        fail("rank scoring definition annotation invalid");
+      return numeric;
+    }),
+  );
+}
+
+/** Metadata-only corrected ranks; all providers retain their own authenticated source order. */
+export function buildCorrectedLocalRosDefenseRankSidecar(input: {
+  readonly profiles: readonly CorrectedLocalRosRankReportPair[];
+  readonly sourceRevision: string;
+  readonly extractorSourceChecksum: string;
+  readonly amendmentChecksum: string;
+  readonly specificationChecksum: string;
+}): CorrectedLocalRosRankSidecar {
+  if (
+    !/^[a-f0-9]{40}$/u.test(input.sourceRevision) ||
+    input.profiles.length !== 9 ||
+    new Set(input.profiles.map((p) => p.scoringProfileKey)).size !== 9 ||
+    new Set(input.profiles.map((p) => p.originalScoringProfileKey)).size !== 9
+  )
+    fail("corrected rank sidecar requires nine distinct original/current profiles");
+  digest(input.extractorSourceChecksum);
+  digest(input.amendmentChecksum);
+  digest(input.specificationChecksum);
+  const profiles = input.profiles.map((profile): CorrectedRankProfile => {
+    const audit = metadataReport(
+      profile.candidateReportJson,
+      profile.candidateReportChecksum,
+      3264,
+    );
+    const training = metadataReport(
+      profile.trainingReportJson,
+      profile.trainingReportChecksum,
+      2176,
+    );
+    const definition = defensePointsAllowedDefinitionForProfile(
+      rosProfileDefinitionFromKey(profile.scoringProfileKey).profile,
+    );
+    if (
+      definition === null ||
+      audit.rows.length !== 544 ||
+      training.rows.length !== 2176 ||
+      audit.scoringProfileKey !== profile.scoringProfileKey ||
+      training.scoringProfileKey !== profile.scoringProfileKey ||
+      audit.scoringProfileDigest !== training.scoringProfileDigest ||
+      audit.scoringProfileDigest !== hash(profile.scoringProfileKey) ||
+      canonical(audit.modelIdentity) !== canonical(training.modelIdentity) ||
+      audit.sourceManifestChecksum !== training.sourceManifestChecksum ||
+      numericRankScoringKey(profile.originalScoringProfileKey) !==
+        numericRankScoringKey(profile.scoringProfileKey)
+    )
+      fail("corrected rank profile, numerical scoring or source mismatch");
+    const ranks: LocalRosDefenseRankRow[] = [];
+    const bindings: RankBinding[] = [];
+    for (const season of PRIOR_SEASONS)
+      for (let asOfWeek = 1; asOfWeek <= 17; asOfWeek += 1) {
+        const full = training.rows.filter((r) => r.season === season && r.asOfWeek === asOfWeek);
+        const original = audit.rows.filter((r) => r.season === season && r.asOfWeek === asOfWeek);
+        if (
+          full.length !== 32 ||
+          new Set(full.map((r) => r.canonicalTeam)).size !== 32 ||
+          original.length !== 8 ||
+          new Set(original.map((r) => r.canonicalTeam)).size !== 8 ||
+          original.some(
+            (r) =>
+              !full.some(
+                (f) => f.canonicalTeam === r.canonicalTeam && f.inputChecksum === r.inputChecksum,
+              ),
+          )
+        )
+          fail("corrected rank requires complete full32 and exact original audit joins");
+        const orderedUniverseChecksum = hash(JSON.stringify(full.map((r) => r.canonicalTeam)));
+        full.forEach((row, index) => {
+          ranks.push({
+            season,
+            asOfWeek,
+            canonicalTeam: row.canonicalTeam,
+            ordinalRank: index + 1,
+            orderedUniverseChecksum,
+          });
+          bindings.push({
+            season,
+            asOfWeek,
+            canonicalTeam: row.canonicalTeam,
+            trainingInputChecksum: row.inputChecksum,
+            auditInputChecksum:
+              original.find((r) => r.canonicalTeam === row.canonicalTeam)?.inputChecksum ?? null,
+          });
+        });
+      }
+    return {
+      scoringProfileKey: profile.scoringProfileKey,
+      scoringProfileDigest: audit.scoringProfileDigest,
+      originalScoringProfileKey: profile.originalScoringProfileKey,
+      originalScoringProfileDigest: hash(profile.originalScoringProfileKey),
+      comparisonManifestChecksum: digest(profile.comparisonManifestChecksum),
+      pointsAllowedDefinition: definition,
+      candidateReportChecksum: profile.candidateReportChecksum,
+      trainingReportChecksum: profile.trainingReportChecksum,
+      sourceManifestChecksum: training.sourceManifestChecksum,
+      modelIdentity: training.modelIdentity,
+      ranks: {
+        featureVersion: LOCAL_ROS_DEFENSE_RANK_VERSION,
+        checksum: localRosDefenseRanksChecksum(ranks),
+        rows: ranks,
+      },
+      bindings,
+    };
+  });
+  const sidecar: CorrectedLocalRosRankSidecar = {
+    version: CORRECTED_LOCAL_ROS_RANK_SIDECAR_VERSION,
+    canAuthorizeRelease: false,
+    featureVersion: LOCAL_ROS_DEFENSE_RANK_VERSION,
+    referenceProductionBasis: REFERENCE_PRODUCTION_BASIS,
+    selectionVersion: SELECTION_VERSION,
+    sourceRevision: input.sourceRevision,
+    extractorSourceChecksum: input.extractorSourceChecksum,
+    amendmentChecksum: input.amendmentChecksum,
+    specificationChecksum: input.specificationChecksum,
+    profiles,
+  };
+  validateCorrectedRankSidecar(sidecar);
+  return sidecar;
+}
+function validateCorrectedRankSidecar(sidecar: CorrectedLocalRosRankSidecar): void {
+  digest(sidecar.amendmentChecksum);
+  digest(sidecar.specificationChecksum);
+  if (
+    !denseArray(sidecar.profiles) ||
+    sidecar.profiles.length !== 9 ||
+    new Set(sidecar.profiles.map((p) => p.scoringProfileKey)).size !== 9 ||
+    new Set(sidecar.profiles.map((p) => p.originalScoringProfileDigest)).size !== 9
+  )
+    fail("corrected rank profiles incomplete");
+  const providerOrders = new Map<string, string>();
+  for (const profile of sidecar.profiles) {
+    digest(profile.candidateReportChecksum);
+    digest(profile.trainingReportChecksum);
+    digest(profile.sourceManifestChecksum);
+    digest(profile.comparisonManifestChecksum);
+    if (
+      profile.scoringProfileDigest !== hash(profile.scoringProfileKey) ||
+      profile.originalScoringProfileDigest !== hash(profile.originalScoringProfileKey) ||
+      numericRankScoringKey(profile.originalScoringProfileKey) !==
+        numericRankScoringKey(profile.scoringProfileKey) ||
+      defensePointsAllowedDefinitionForProfile(
+        rosProfileDefinitionFromKey(profile.scoringProfileKey).profile,
+      ) !== profile.pointsAllowedDefinition ||
+      !["yahoo-2022-v1", "espn-2019-v1"].includes(profile.pointsAllowedDefinition) ||
+      profile.ranks.featureVersion !== LOCAL_ROS_DEFENSE_RANK_VERSION ||
+      !denseArray(profile.ranks.rows) ||
+      profile.ranks.rows.length !== 2176 ||
+      profile.ranks.checksum !== localRosDefenseRanksChecksum(profile.ranks.rows) ||
+      !denseArray(profile.bindings) ||
+      profile.bindings.length !== 2176 ||
+      new Set(profile.bindings.map(rankIdentity)).size !== 2176 ||
+      profile.bindings.filter((b) => b.auditInputChecksum !== null).length !== 544
+    )
+      fail("corrected rank identity, population or numerical scoring mismatch");
+    profile.bindings.forEach((binding, index) => {
+      digest(binding.trainingInputChecksum);
+      if (
+        binding.auditInputChecksum !== null &&
+        digest(binding.auditInputChecksum) !== binding.trainingInputChecksum
+      )
+        fail("corrected audit input differs from native training");
+      if (rankIdentity(binding) !== rankIdentity(profile.ranks.rows[index]!))
+        fail("corrected rank binding order mismatch");
+    });
+    const key = profile.pointsAllowedDefinition;
+    const value = canonical({
+      ranks: profile.ranks,
+      source: profile.sourceManifestChecksum,
+      model: profile.modelIdentity,
+    });
+    if (providerOrders.has(key) && providerOrders.get(key) !== value)
+      fail("corrected rank order or source differs within provider");
+    providerOrders.set(key, value);
+  }
+}
+function readRankSidecar(text: string, checksum: string): AnyLocalRosRankSidecar {
   const raw = record(pinned(text, checksum, 16 * 1024 * 1024));
   if (
-    raw.version !== LOCAL_ROS_RANK_SIDECAR_VERSION ||
+    (raw.version !== LOCAL_ROS_RANK_SIDECAR_VERSION &&
+      raw.version !== CORRECTED_LOCAL_ROS_RANK_SIDECAR_VERSION) ||
     raw.canAuthorizeRelease !== false ||
     raw.featureVersion !== LOCAL_ROS_DEFENSE_RANK_VERSION ||
     raw.referenceProductionBasis !== REFERENCE_PRODUCTION_BASIS ||
@@ -378,6 +602,11 @@ function readRankSidecar(text: string, checksum: string): LocalRosRankSidecar {
   )
     fail("rank sidecar metadata mismatch");
   digest(raw.extractorSourceChecksum);
+  if (raw.version === CORRECTED_LOCAL_ROS_RANK_SIDECAR_VERSION) {
+    const sidecar = raw as unknown as CorrectedLocalRosRankSidecar;
+    validateCorrectedRankSidecar(sidecar);
+    return sidecar;
+  }
   digest(raw.sourceManifestChecksum);
   const sidecar = raw as unknown as LocalRosRankSidecar;
   if (
@@ -418,21 +647,63 @@ function readRankSidecar(text: string, checksum: string): LocalRosRankSidecar {
   return sidecar;
 }
 function verifyRankProfile(
-  sidecar: LocalRosRankSidecar,
+  sidecar: AnyLocalRosRankSidecar,
   audit: readonly FirstPartyRosHeldOutForecast[],
   training: readonly FirstPartyRosHeldOutForecast[],
   input: RosLocalDevelopmentInput,
+  derived: ReturnType<typeof parsePinnedRosMarginalDevelopmentInputs>["derivedEvaluation"],
 ): LocalRosDefenseRanks {
   const profile = sidecar.profiles.find(
     (entry) => entry.scoringProfileKey === input.scoringProfileKey,
   );
+  const metadata =
+    sidecar.version === CORRECTED_LOCAL_ROS_RANK_SIDECAR_VERSION
+      ? (profile as CorrectedRankProfile | undefined)
+      : sidecar;
   if (
     !profile ||
+    !metadata ||
     profile.candidateReportChecksum !== input.candidateReportChecksum ||
     profile.trainingReportChecksum !== input.intervalTrainingReportChecksum ||
-    sidecar.sourceManifestChecksum !== input.sourceManifestChecksum
+    metadata.sourceManifestChecksum !== input.sourceManifestChecksum
   )
     fail("rank sidecar report/source binding mismatch");
+  if (sidecar.version === CORRECTED_LOCAL_ROS_RANK_SIDECAR_VERSION) {
+    const corrected = profile as CorrectedRankProfile;
+    if (
+      derived === null ||
+      corrected.comparisonManifestChecksum !== derived.lineage.comparisonManifestChecksum ||
+      corrected.pointsAllowedDefinition !== derived.lineage.pointsAllowedDefinition ||
+      corrected.originalScoringProfileKey !==
+        record(derived.originalCandidateReport.identityAudit).scoringProfileKey ||
+      input.rankAmendmentJson === undefined ||
+      input.rankAmendmentChecksum === undefined ||
+      input.rankAmendmentChecksum !== sidecar.amendmentChecksum ||
+      input.specificationChecksum !== sidecar.specificationChecksum
+    )
+      fail("corrected rank requires exact derived source and amendment binding");
+    const amendment = record(
+      pinned(input.rankAmendmentJson, input.rankAmendmentChecksum, 1024 * 1024),
+    );
+    if (
+      amendment.version !== "corrected-provider-rank-metadata-amendment-v1" ||
+      amendment.state !== "frozen-before-corrected-profile-results" ||
+      amendment.originalSpecificationSha256 !== input.specificationChecksum ||
+      amendment.methodUnchanged !== LOCAL_ROS_INTERVAL_VERSION ||
+      amendment.noOutcomeFitting !== true ||
+      amendment.noSimulation !== true ||
+      amendment.canAuthorizeRelease !== false ||
+      canonical(amendment.originalProfileDigests) !==
+        canonical(sidecar.profiles.map((p) => p.originalScoringProfileDigest))
+    )
+      fail("corrected rank amendment or original specification mismatch");
+  } else if (
+    derived !== null ||
+    input.rankAmendmentJson !== undefined ||
+    input.rankAmendmentChecksum !== undefined
+  ) {
+    fail("corrected evaluation requires provider-bound rank sidecar");
+  }
   const expected = new Map(profile.bindings.map((row) => [rankIdentity(row), row]));
   for (const [rows, field] of [
     [audit.filter((row) => row.position === "DST"), "auditInputChecksum"],
@@ -449,9 +720,9 @@ function verifyRankProfile(
       if (
         !binding ||
         binding[field] !== row.inputChecksum ||
-        row.contextualModelVersion !== sidecar.modelIdentity.contextualModelVersion ||
-        row.recencyModelVersion !== sidecar.modelIdentity.recencyModelVersion ||
-        row.intervalMethodVersion !== sidecar.modelIdentity.intervalMethodVersion
+        row.contextualModelVersion !== metadata.modelIdentity.contextualModelVersion ||
+        row.recencyModelVersion !== metadata.modelIdentity.recencyModelVersion ||
+        row.intervalMethodVersion !== metadata.modelIdentity.intervalMethodVersion
       )
         fail("rank sidecar forecast input/model join mismatch");
     }
@@ -462,15 +733,19 @@ function verifyRankProfile(
       const ordered = training
         .filter((row) => row.forecastSeason === season && row.asOfWeek === cutoff)
         .map((row) => row.playerId.slice(4));
-      const ranks = sidecar.ranks.rows.filter(
+      const ranks = metadata.ranks.rows.filter(
         (row) => row.season === season && row.asOfWeek === cutoff,
       );
       if (canonical(ordered) !== canonical(ranks.map((row) => row.canonicalTeam)))
         fail("rank sidecar current report order mismatch");
     }
-  return sidecar.ranks;
+  return metadata.ranks;
 }
-function verifySpecification(text: string, checksum: string, sidecar: LocalRosRankSidecar): void {
+function verifySpecification(
+  text: string,
+  checksum: string,
+  sidecar: AnyLocalRosRankSidecar,
+): void {
   const specification = record(pinned(text, checksum, 1024 * 1024));
   if (
     specification.version !== "ros-local-residual-candidate-spec-v2" ||
@@ -478,7 +753,11 @@ function verifySpecification(text: string, checksum: string, sidecar: LocalRosRa
     specification.canAuthorizeRelease !== false ||
     specification.canAuthorizeHistoricalExecution !== false ||
     canonical(record(specification.population).scoringProfiles) !==
-      canonical(sidecar.profiles.map((profile) => profile.scoringProfileDigest))
+      canonical(
+        sidecar.version === CORRECTED_LOCAL_ROS_RANK_SIDECAR_VERSION
+          ? sidecar.profiles.map((profile) => profile.originalScoringProfileDigest)
+          : sidecar.profiles.map((profile) => profile.scoringProfileDigest),
+      )
   )
     fail("local specification/version/profile order mismatch");
 }
@@ -785,7 +1064,13 @@ export function buildRosLocalDevelopmentReport(input: RosLocalDevelopmentInput) 
   )
     fail("complete 4896-row training composition is required");
   const sidecar = readRankSidecar(input.rankSidecarJson, input.rankSidecarChecksum);
-  const ranks = verifyRankProfile(sidecar, parsed.candidate.raw, parsed.training.raw, input);
+  const ranks = verifyRankProfile(
+    sidecar,
+    parsed.candidate.raw,
+    parsed.training.raw,
+    input,
+    parsed.derivedEvaluation,
+  );
   verifySpecification(input.specificationText, input.specificationChecksum, sidecar);
   const trainingOptions = { intervalTrainingSeasons: parsed.intervalTraining.heldOutSeasons };
   const evaluation = evaluateLocalRosDevelopment(parsed.candidate.heldOutSeasons, {
@@ -1064,6 +1349,12 @@ export function buildRosLocalDevelopmentReport(input: RosLocalDevelopmentInput) 
       specificationChecksum: input.specificationChecksum,
       rankSidecarChecksum: input.rankSidecarChecksum,
       rankSidecar: sidecar,
+      ...(input.rankAmendmentJson === undefined
+        ? {}
+        : {
+            rankAmendmentJson: input.rankAmendmentJson,
+            rankAmendmentChecksum: input.rankAmendmentChecksum,
+          }),
       sourceComponentEquivalence: "requires-separate-pinned-source-preflight",
       intervalTraining: parsed.intervalTraining?.source ?? null,
       intervalTrainingComposition: parsed.composite?.manifest ?? null,
