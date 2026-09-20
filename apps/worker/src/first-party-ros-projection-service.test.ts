@@ -18,6 +18,7 @@ import {
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   evaluateFirstPartyRosChampionPolicy,
+  extractFirstPartyRosPointConvergence,
   projectFirstPartyRestOfSeason,
   rosScoringProfile,
   type FirstPartyRosChampionPolicy,
@@ -28,6 +29,12 @@ import {
 } from "@laces-out/projections";
 import { describe, expect, it } from "vitest";
 
+import {
+  pointRosReleaseFixture,
+  pointConvergenceFixture,
+  pointLegacyConvergenceChecksumFixture,
+} from "../../../packages/projections/src/point-ros-release.test-fixtures.js";
+import { HISTORICAL_ROS_CANDIDATE_PAIR_VERSION } from "./first-party-ros-backtest.js";
 import {
   FirstPartyRosProjectionShadowService,
   type FirstPartyRosCandidateProvider,
@@ -284,6 +291,55 @@ function baseTarget(): FirstPartyRosPublicationTarget {
       },
     ],
     sourceAsOf: fresh,
+  };
+}
+
+function pointTargetFixture() {
+  const fixture = pointRosReleaseFixture();
+  const artifact = {
+    ...fixture.artifact,
+    artifactChecksum: firstPartyRosChampionArtifactChecksum(fixture.artifact),
+  };
+  const target = baseTarget();
+  const strategy = fixture.policy.choices.find(
+    (choice) => choice.position === "WR" && choice.bucket === "five-to-eight",
+  )!.strategy;
+  const diagnostic = pointConvergenceFixture("WR", artifact.scoringProfileKey);
+  const convergence = {
+    state: diagnostic.state,
+    diagnosticChecksum: pointLegacyConvergenceChecksumFixture(diagnostic),
+  };
+  return {
+    artifact,
+    target: {
+      ...target,
+      evidence: [
+        {
+          ...fixture.live,
+          position: "WR",
+          bucket: "five-to-eight",
+          convergence: { contextual: convergence, recency: convergence },
+          pointConvergence: { contextual: diagnostic, recency: diagnostic },
+        },
+      ],
+      convergence: extractFirstPartyRosPointConvergence({
+        position: "WR",
+        scoringProfileKey: artifact.scoringProfileKey,
+        diagnostic,
+      }),
+      released: target.released.map((player) => ({
+        ...player,
+        strategy,
+        projection: {
+          ...player.projection,
+          provenance: {
+            ...player.projection.provenance,
+            strategy,
+            weeklyModelVersion: HISTORICAL_ROS_CANDIDATE_PAIR_VERSION,
+          },
+        },
+      })),
+    } satisfies FirstPartyRosPublicationTarget,
   };
 }
 
@@ -670,6 +726,138 @@ describe("first-party ROS shadow service publication rail", () => {
     });
     const metadata = harness.sourceUpdates.at(-1)?.metadata as Record<string, unknown>;
     expect(String(metadata.diagnostics)).not.toContain("old_run_diagnostic");
+  });
+
+  it("audits unresolved point identities and still publishes another league without changing raw candidates", async () => {
+    const { artifact, target } = pointTargetFixture();
+    const alias = {
+      position: "WR" as const,
+      team: "MIA",
+      canonicalPlayerId: target.released[0]!.projection.playerId,
+      playerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    };
+    const incomplete = {
+      ...target,
+      candidateUniverse: {
+        ...target.candidateUniverse,
+        complete: false,
+        playerAliases: [alias],
+        playerAliasIssues: [
+          {
+            position: "WR" as const,
+            playerId: "unresolved-roster-player",
+            code: "identity-unresolved",
+          },
+        ],
+      },
+      released: target.released.map((player) => ({ ...player, playerId: alias.playerId })),
+    };
+    const healthyAlias = { ...alias, playerId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
+    const healthy = {
+      ...target,
+      leagueSeasonId: "33333333-3333-4333-8333-333333333333",
+      candidateUniverse: { ...target.candidateUniverse, playerAliases: [healthyAlias] },
+      released: target.released.map((player) => ({ ...player, playerId: healthyAlias.playerId })),
+    };
+    const original = structuredClone(incomplete);
+    const harness = new Harness({ artifact });
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      releaseRail: "point-v1",
+      candidateProvider: {
+        ...fakeProvider(incomplete),
+        buildTargets: async () => [incomplete, healthy],
+      },
+    });
+
+    await service.refreshProjections(job, context);
+
+    expect(incomplete).toEqual(original);
+    expect(harness.countInserts(projectionSets)).toBe(1);
+    expect(harness.lastInsert(projectionSets)?.leagueSeasonId).toBe(healthy.leagueSeasonId);
+    expect(harness.countInserts(playerProjections)).toBe(1);
+    expect(harness.countInserts(playerRosProjectionSummaries)).toBe(1);
+    expect(harness.lastInsert(playerProjections)).toEqual([
+      expect.objectContaining({ playerId: healthyAlias.playerId }),
+    ]);
+    const audit = harness.inserts.find(
+      (entry) =>
+        entry.table === projectionModelRuns &&
+        (entry.values.configuration as { mode?: unknown }).mode === "release-evaluation",
+    );
+    expect(audit?.values).toMatchObject({
+      qualityState: "degraded",
+      playersEvaluated: 1,
+      playersPublished: 0,
+      configuration: {
+        leagueSeasonId: incomplete.leagueSeasonId,
+        evaluationPlayerIdentity: "canonical-simulation",
+        candidateUniverse: incomplete.candidateUniverse,
+      },
+      metrics: {
+        preservePriorGoodSet: true,
+        withheldReasons: ["ros_candidate_universe_incomplete"],
+      },
+    });
+    expect(harness.sourceUpdates.at(-1)?.metadata).toMatchObject({
+      result: "released",
+      publishedTargets: 1,
+    });
+  });
+
+  it("still rejects an unresolved identity plan claiming authoritative point publication", async () => {
+    const { artifact, target } = pointTargetFixture();
+    const invalid = {
+      ...target,
+      candidateUniverse: {
+        ...target.candidateUniverse,
+        playerAliasIssues: [
+          { position: "WR" as const, playerId: "unresolved", code: "identity-unresolved" },
+        ],
+      },
+    };
+    const harness = new Harness({ artifact });
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      releaseRail: "point-v1",
+      candidateProvider: fakeProvider(invalid),
+    });
+    await expect(service.refreshProjections(job, context)).rejects.toThrow("unresolved issues");
+    expect(harness.countInserts(projectionSets)).toBe(0);
+    expect(harness.countInserts(playerProjections)).toBe(0);
+    expect(harness.countInserts(playerRosProjectionSummaries)).toBe(0);
+  });
+
+  it("does not bypass raw point validation for an evaluation-only identity failure", async () => {
+    const { artifact, target } = pointTargetFixture();
+    const invalid = {
+      ...target,
+      candidateUniverse: {
+        ...target.candidateUniverse,
+        complete: false,
+        playerAliasIssues: [
+          { position: "WR" as const, playerId: "unresolved", code: "identity-unresolved" },
+        ],
+      },
+      released: target.released.map((player) => ({
+        ...player,
+        projection: { ...player.projection, meanPoints: NaN },
+      })),
+    };
+    const harness = new Harness({ artifact });
+    const service = new FirstPartyRosProjectionShadowService({
+      database: harness.database,
+      now: () => now,
+      releaseRail: "point-v1",
+      candidateProvider: fakeProvider(invalid),
+    });
+    await expect(service.refreshProjections(job, context)).rejects.toThrow(
+      "selected raw projection",
+    );
+    expect(harness.countInserts(projectionModelRuns)).toBe(0);
+    expect(harness.countInserts(projectionSets)).toBe(0);
   });
 
   it("withholds publication when the candidate roster was checked recently but not verified recently", async () => {

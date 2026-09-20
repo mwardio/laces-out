@@ -107,6 +107,7 @@ import {
   firstPartyAvailableProjectionComponents,
   firstPartyDefensePlayerId,
   projectionHistorySeasons,
+  sourceIsUsableForProjection,
 } from "./first-party-projections.js";
 import type {
   FirstPartyRosCandidateContext,
@@ -442,6 +443,91 @@ export interface FirstPartyRosPlayerAliasIssue {
 export interface FirstPartyRosPlayerAliasPlan {
   readonly aliases: readonly FirstPartyRosPlayerAlias[];
   readonly issues: readonly FirstPartyRosPlayerAliasIssue[];
+  readonly unavailableRosterPlayers?: readonly FirstPartyRosUnavailableRosterPlayer[];
+}
+
+export interface FirstPartyRosUnavailableRosterPlayer {
+  readonly playerId: string;
+  readonly position: FirstPartyRosRailPosition;
+  readonly reason: "no-current-nfl-team";
+  readonly sourceKey: "sleeper.players";
+  readonly sourceChecksum: string;
+  readonly gsisId: string;
+}
+
+interface RosRosterAvailabilityObservation {
+  readonly playerId: string | null;
+  readonly gsisId: string | null;
+  readonly nflTeam: string | null;
+  readonly primaryPosition: string;
+  readonly observedAt: Date;
+}
+
+/** A known free agent is unavailable for ROS, not an unresolved active-player identity. */
+export function firstPartyRosUnavailableRosterPlayers(input: {
+  readonly rosterPlayers: readonly FirstPartyRosPlayerAliasIdentity[];
+  readonly canonicalPlayers: readonly FirstPartyRosPlayerAliasIdentity[];
+  readonly observations: readonly RosRosterAvailabilityObservation[];
+  readonly source?: Parameters<typeof sourceIsUsableForProjection>[0] & {
+    readonly enabled: boolean;
+    readonly lastChangedAt: Date | null;
+  };
+  readonly now: Date;
+}): readonly FirstPartyRosUnavailableRosterPlayer[] {
+  const source = input.source;
+  if (
+    source === undefined ||
+    source.key !== "sleeper.players" ||
+    !source.enabled ||
+    source.lastChangedAt === null ||
+    source.lastChangedAt.getTime() > input.now.getTime() ||
+    !sourceIsUsableForProjection(source, input.now) ||
+    source.lastSuccessfulAt!.getTime() > input.now.getTime() ||
+    source.lastCheckedAt!.getTime() > input.now.getTime() ||
+    !/^[a-f0-9]{64}$/u.test(source.lastChecksum!)
+  )
+    return [];
+  const result: FirstPartyRosUnavailableRosterPlayer[] = [];
+  for (const playerId of new Set(input.rosterPlayers.map((player) => player.playerId))) {
+    const rows = input.rosterPlayers.filter((player) => player.playerId === playerId);
+    const row = rows[0]!;
+    const position = aliasPosition(row.position);
+    const gsisId = row.gsisId?.trim();
+    const observations = input.observations.filter(
+      (observation) => observation.playerId === playerId,
+    );
+    const observation = observations[0];
+    if (
+      !position ||
+      position === "DST" ||
+      !gsisId ||
+      rows.some(
+        (other) =>
+          other.gsisId?.trim() !== gsisId ||
+          aliasPosition(other.position) !== position ||
+          other.team !== row.team,
+      ) ||
+      input.canonicalPlayers.some(
+        (candidate) => candidate.playerId === playerId || candidate.gsisId?.trim() === gsisId,
+      ) ||
+      observations.length !== 1 ||
+      observation === undefined ||
+      observation.gsisId?.trim() !== gsisId ||
+      aliasPosition(observation.primaryPosition) !== position ||
+      observation.nflTeam !== null ||
+      observation.observedAt.getTime() !== source.lastChangedAt.getTime()
+    )
+      continue;
+    result.push({
+      playerId,
+      position,
+      reason: "no-current-nfl-team",
+      sourceKey: "sleeper.players",
+      sourceChecksum: source.lastChecksum!,
+      gsisId,
+    });
+  }
+  return result.sort((left, right) => left.playerId.localeCompare(right.playerId));
 }
 
 function aliasPosition(value: string): FirstPartyRosRailPosition | undefined {
@@ -874,6 +960,13 @@ export function applyFirstPartyRosPlayerAliases(
       ...target.candidateUniverse,
       playerAliases: aliases,
       playerAliasIssues: issues,
+      ...(plan.unavailableRosterPlayers?.length
+        ? {
+            unavailableRosterPlayers: plan.unavailableRosterPlayers.filter((player) =>
+              expectedPositions.has(player.position),
+            ),
+          }
+        : {}),
       complete: target.candidateUniverse.complete && issues.length === 0,
     },
     released: target.released.map((player) => {
@@ -1659,6 +1752,13 @@ export function firstPartyRosPlayerAliasPlansChecksum(
           leagueSeasonId,
           aliases: [...plan.aliases].sort(playerAliasSort),
           issues: [...plan.issues].sort(playerAliasIssueSort),
+          ...(plan.unavailableRosterPlayers?.length
+            ? {
+                unavailableRosterPlayers: [...plan.unavailableRosterPlayers].sort((left, right) =>
+                  left.playerId.localeCompare(right.playerId),
+                ),
+              }
+            : {}),
         })),
     ),
   );
@@ -1787,6 +1887,24 @@ async function latestLeaguePlayerAliasPlans(
   ];
   const externalIds: FirstPartyRosPlayerAliasExternalId[] = [];
   const gsisEvidence: FirstPartyRosPlayerAliasGsisEvidence[] = [];
+  const availabilityObservations: RosRosterAvailabilityObservation[] = [];
+  const [availabilitySource] = sleeperSourceId
+    ? await database
+        .select({
+          key: dataSources.key,
+          enabled: dataSources.enabled,
+          lastChecksum: dataSources.lastChecksum,
+          lastCheckedAt: dataSources.lastCheckedAt,
+          lastSuccessfulAt: dataSources.lastSuccessfulAt,
+          lastChangedAt: dataSources.lastChangedAt,
+          consecutiveFailures: dataSources.consecutiveFailures,
+          checkIntervalMinutes: dataSources.checkIntervalMinutes,
+          metadata: dataSources.metadata,
+        })
+        .from(dataSources)
+        .where(and(eq(dataSources.id, sleeperSourceId), eq(dataSources.key, "sleeper.players")))
+        .limit(1)
+    : [];
   for (const ids of queryChunks(identityPlayerIds)) {
     const [externalRows, sourceRows] = await Promise.all([
       database
@@ -1807,6 +1925,9 @@ async function latestLeaguePlayerAliasPlans(
             .select({
               playerId: playerSourceObservations.playerId,
               gsisId: playerSourceObservations.gsisId,
+              nflTeam: playerSourceObservations.nflTeam,
+              primaryPosition: playerSourceObservations.primaryPosition,
+              observedAt: playerSourceObservations.observedAt,
             })
             .from(playerSourceObservations)
             .where(
@@ -1818,6 +1939,7 @@ async function latestLeaguePlayerAliasPlans(
         : Promise.resolve([]),
     ]);
     externalIds.push(...externalRows);
+    availabilityObservations.push(...sourceRows);
     gsisEvidence.push(
       ...sourceRows.flatMap((row) =>
         row.playerId ? [{ playerId: row.playerId, gsisId: row.gsisId }] : [],
@@ -1846,19 +1968,32 @@ async function latestLeaguePlayerAliasPlans(
       })
     : { complete: false, externalIds };
 
+  const availabilityNow = new Date();
   return new Map(
-    uniqueLeagueIds.map((leagueSeasonId) => [
-      leagueSeasonId,
-      firstPartyRosPlayerAliasPlan({
+    uniqueLeagueIds.map((leagueSeasonId) => {
+      const rosterPlayers = rosterPlayersByLeague.get(leagueSeasonId) ?? [];
+      const unavailableRosterPlayers = firstPartyRosUnavailableRosterPlayers({
+        rosterPlayers,
+        canonicalPlayers,
+        observations: availabilityObservations,
+        ...(availabilitySource === undefined ? {} : { source: availabilitySource }),
+        now: availabilityNow,
+      });
+      const unavailableIds = new Set(unavailableRosterPlayers.map((player) => player.playerId));
+      const plan = firstPartyRosPlayerAliasPlan({
         leagueSeasonId,
-        rosterPlayers: rosterPlayersByLeague.get(leagueSeasonId) ?? [],
+        rosterPlayers: rosterPlayers.filter((player) => !unavailableIds.has(player.playerId)),
         canonicalPlayers,
         externalIds: yahooEvidence.externalIds,
         yahooExternalEvidenceComplete: yahooEvidence.complete,
         gsisEvidence,
         initialIssues: initialIssuesByLeague.get(leagueSeasonId) ?? [],
-      }),
-    ]),
+      });
+      return [
+        leagueSeasonId,
+        { ...plan, ...(unavailableRosterPlayers.length ? { unavailableRosterPlayers } : {}) },
+      ] as const;
+    }),
   );
 }
 

@@ -36,6 +36,7 @@ import {
   firstPartyRosEffectiveRosterAliasPosition,
   firstPartyRosPlayerAliasPlan,
   firstPartyRosPlayerAliasPlansChecksum,
+  firstPartyRosUnavailableRosterPlayers,
   firstPartyRosYahooEvidenceClosure,
   unmatchedCurrentFantasyPlayers,
   type FirstPartyRosScoringRuleRow,
@@ -2401,5 +2402,174 @@ describe("buildFirstPartyRosLeagueTarget", () => {
     expect(result.target).toBeNull();
     expect(result.leagueReason).toBe("no_releasable_candidates");
     expect(result.skippedPlayers).toBe(2);
+  });
+});
+
+describe("known roster players outside the current NFL candidate pool", () => {
+  const checkedAt = new Date("2026-09-20T09:40:00Z");
+  function availabilityInput(): Parameters<typeof firstPartyRosUnavailableRosterPlayers>[0] {
+    return {
+      now: new Date("2026-09-20T10:00:00Z"),
+      rosterPlayers: [
+        {
+          playerId: "known-player",
+          fullName: "Known Receiver",
+          position: "WR",
+          team: "MIA",
+          gsisId: "00-0033040",
+        },
+      ],
+      canonicalPlayers: [],
+      observations: [
+        {
+          playerId: "known-player",
+          gsisId: "00-0033040",
+          primaryPosition: "WR",
+          nflTeam: null,
+          observedAt: checkedAt,
+        },
+      ],
+      source: {
+        key: "sleeper.players",
+        enabled: true,
+        lastChecksum: "a".repeat(64),
+        lastChangedAt: checkedAt,
+        lastCheckedAt: checkedAt,
+        lastSuccessfulAt: checkedAt,
+        consecutiveFailures: 0,
+        checkIntervalMinutes: 15,
+        metadata: {},
+      },
+    };
+  }
+  it("audits an exact known free agent as unavailable without an alias or fabricated forecast", () => {
+    const unavailable = firstPartyRosUnavailableRosterPlayers(availabilityInput());
+    expect(unavailable).toEqual([
+      {
+        playerId: "known-player",
+        position: "WR",
+        reason: "no-current-nfl-team",
+        sourceKey: "sleeper.players",
+        sourceChecksum: "a".repeat(64),
+        gsisId: "00-0033040",
+      },
+    ]);
+    const withExclusion = new Map([
+      ["league", { aliases: [], issues: [], unavailableRosterPlayers: unavailable }],
+    ]);
+    const ordinary = new Map([["league", { aliases: [], issues: [] }]]);
+    expect(firstPartyRosPlayerAliasPlansChecksum(withExclusion)).not.toBe(
+      firstPartyRosPlayerAliasPlansChecksum(ordinary),
+    );
+    expect(firstPartyRosPlayerAliasPlansChecksum(withExclusion)).not.toBe(
+      firstPartyRosPlayerAliasPlansChecksum(
+        new Map([
+          [
+            "league",
+            {
+              aliases: [],
+              issues: [],
+              unavailableRosterPlayers: [{ ...unavailable[0]!, sourceChecksum: "b".repeat(64) }],
+            },
+          ],
+        ]),
+      ),
+    );
+  });
+  it.each([
+    "missing-source",
+    "stale",
+    "future",
+    "future-observation",
+    "failed",
+    "disabled",
+    "wrong-source",
+    "unpublished",
+    "refreshing",
+    "missing-observation",
+    "old-observation",
+    "ambiguous-observation",
+    "wrong-id",
+    "wrong-gsis",
+    "missing-gsis",
+    "wrong-position",
+    "has-team",
+    "blank-team",
+    "candidate-id",
+    "candidate-gsis",
+    "conflicting-roster",
+  ])("does not excuse unresolved identities with %s evidence", (kind) => {
+    const original = availabilityInput();
+    let input = original;
+    const observation = original.observations[0]!;
+    const source = original.source!;
+    if (kind === "missing-source") {
+      const { source: unused, ...rest } = original;
+      void unused;
+      input = rest;
+    }
+    if (kind === "stale") input = { ...original, now: new Date("2026-09-21T10:00:00Z") };
+    if (kind === "future") input = { ...original, now: new Date("2026-09-20T09:00:00Z") };
+    if (kind === "future-observation") {
+      const future = new Date("2026-09-20T11:00:00Z");
+      input = {
+        ...original,
+        source: { ...source, lastChangedAt: future },
+        observations: [{ ...observation, observedAt: future }],
+      };
+    }
+    if (kind === "failed") input = { ...original, source: { ...source, consecutiveFailures: 1 } };
+    if (kind === "disabled") input = { ...original, source: { ...source, enabled: false } };
+    if (kind === "wrong-source")
+      input = { ...original, source: { ...source, key: "other.players" } };
+    if (kind === "unpublished")
+      input = { ...original, source: { ...source, metadata: { publishable: false } } };
+    if (kind === "refreshing")
+      input = {
+        ...original,
+        source: { ...source, metadata: { refreshClaimedAt: checkedAt.toISOString() } },
+      };
+    if (kind === "missing-observation") input = { ...original, observations: [] };
+    if (kind === "old-observation")
+      input = {
+        ...original,
+        observations: [{ ...observation, observedAt: new Date("2026-09-19T09:40:00Z") }],
+      };
+    if (kind === "ambiguous-observation")
+      input = { ...original, observations: [observation, { ...observation, nflTeam: "BUF" }] };
+    if (kind === "wrong-id")
+      input = { ...original, observations: [{ ...observation, playerId: "other-player" }] };
+    if (kind === "wrong-gsis")
+      input = { ...original, observations: [{ ...observation, gsisId: "00-9999999" }] };
+    if (kind === "missing-gsis")
+      input = { ...original, rosterPlayers: [{ ...original.rosterPlayers[0]!, gsisId: null }] };
+    if (kind === "wrong-position")
+      input = { ...original, observations: [{ ...observation, primaryPosition: "RB" }] };
+    if (kind === "has-team")
+      input = { ...original, observations: [{ ...observation, nflTeam: "BUF" }] };
+    if (kind === "blank-team")
+      input = { ...original, observations: [{ ...observation, nflTeam: "" }] };
+    if (kind === "candidate-id") input = { ...original, canonicalPlayers: original.rosterPlayers };
+    if (kind === "candidate-gsis")
+      input = {
+        ...original,
+        canonicalPlayers: [{ ...original.rosterPlayers[0]!, playerId: "other-canonical" }],
+      };
+    if (kind === "conflicting-roster")
+      input = {
+        ...original,
+        rosterPlayers: [...original.rosterPlayers, { ...original.rosterPlayers[0]!, team: "BUF" }],
+      };
+    expect(firstPartyRosUnavailableRosterPlayers(input)).toEqual([]);
+  });
+  it("re-enters normal candidate handling immediately after a team assignment", () => {
+    const before = availabilityInput();
+    expect(firstPartyRosUnavailableRosterPlayers(before)).toHaveLength(1);
+    expect(
+      firstPartyRosUnavailableRosterPlayers({
+        ...before,
+        observations: [{ ...before.observations[0]!, nflTeam: "BUF" }],
+      }),
+    ).toEqual([]);
   });
 });

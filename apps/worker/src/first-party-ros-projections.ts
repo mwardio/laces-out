@@ -94,6 +94,14 @@ export interface FirstPartyRosPublicationTarget {
       readonly playerId: string;
       readonly code: string;
     }[];
+    readonly unavailableRosterPlayers?: readonly {
+      readonly playerId: string;
+      readonly position: FirstPartyRosRailPosition;
+      readonly reason: "no-current-nfl-team";
+      readonly sourceKey: "sleeper.players";
+      readonly sourceChecksum: string;
+      readonly gsisId: string;
+    }[];
     readonly complete: boolean;
   };
   readonly futureWindowComplete: boolean;
@@ -1148,10 +1156,17 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       const releasedPlayers = calibrateFirstPartyRosReleasedPlayers({
         artifact: input.artifact,
         decision,
-        playerIdentity: target.candidateUniverse,
-        players: target.released.filter((player) =>
-          releasing.has(`${player.projection.position}:${player.bucket}`),
-        ),
+        ...(decision.preservePriorGoodSet ? {} : { playerIdentity: target.candidateUniverse }),
+        players: target.released
+          .filter((player) => releasing.has(`${player.projection.position}:${player.bucket}`))
+          // An evaluation writes no league player rows. Validate the untouched canonical
+          // simulations without requiring unresolved provider IDs to authorize publication.
+          // The full identity plan and its issues remain on the non-authoritative audit below.
+          .map((player) =>
+            decision.preservePriorGoodSet
+              ? { ...player, playerId: player.projection.playerId }
+              : player,
+          ),
       });
       if (releasedPlayers.length === 0) continue;
       const committed = await this.#persistPublication({
@@ -1246,6 +1261,9 @@ export class FirstPartyRosProjectionShadowService implements ProjectionRefreshSe
       extraConfiguration: {
         leagueSeasonId: input.target.leagueSeasonId,
         candidateUniverse: input.target.candidateUniverse,
+        ...(input.decision.preservePriorGoodSet
+          ? { evaluationPlayerIdentity: "canonical-simulation" }
+          : {}),
       },
     });
 
