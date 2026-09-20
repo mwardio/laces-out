@@ -60,12 +60,18 @@ function lineupAnswer(data: unknown): string | undefined {
     ? lineup.notes.filter((note): note is string => typeof note === "string").join(" ")
     : "";
   const qualifications = `${cutoff}${notes ? `\n\n${notes}` : ""}`;
+  const partialTotals = lineup.totalsScope === "projected-players-only";
   const totals =
     current !== undefined && optimal !== undefined
-      ? ` Your current lineup projects ${current}; the proposed one projects ${optimal}.`
+      ? partialTotals
+        ? ` Partial projected totals are ${current} for your current lineup and ${optimal} for the proposed lineup. Locked players without a forecast stay in place and are excluded from those totals.`
+        : ` Your current lineup projects ${current}; the proposed one projects ${optimal}.`
       : "";
   if (lines.length === 0) {
-    return `Your starters have the highest total under these projections.${totals}${qualifications}`;
+    const conclusion = partialTotals
+      ? "No changes are suggested among the players who can still move."
+      : "Your starters have the highest total under these projections.";
+    return `${conclusion}${totals}${qualifications}`;
   }
   return `The lineup model suggests these changes:\n\n${lines.join("\n")}\n${totals}${qualifications}`.trim();
 }

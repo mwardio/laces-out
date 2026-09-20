@@ -66,6 +66,55 @@ function answerForLineup(lineup: unknown): string {
   ]);
 }
 
+it.each([true, false])(
+  "labels partial lineup totals when movable changes are present: %s",
+  (withChanges) => {
+    const answer = answerForLineup({
+      state: "available",
+      feasible: true,
+      totalsScope: "projected-players-only",
+      currentProjectedPoints: 100,
+      optimalProjectedPoints: withChanges ? 101 : 100,
+      // Disclosure must not depend on callers also supplying a note.
+      notes: [],
+      changes: withChanges
+        ? [
+            {
+              slotLabel: "FLEX",
+              add: { name: "Player A" },
+              remove: { name: "Player B" },
+              projectedPointDelta: 1,
+            },
+          ]
+        : [],
+    });
+    expect(answer).toContain(
+      `Partial projected totals are 100 for your current lineup and ${withChanges ? 101 : 100} for the proposed lineup.`,
+    );
+    expect(answer).toContain(
+      "Locked players without a forecast stay in place and are excluded from those totals.",
+    );
+    expect(answer).not.toContain("Your current lineup projects");
+    expect(answer).not.toContain("highest total");
+    if (withChanges) expect(answer).toContain("+1 projected points");
+    else expect(answer).toContain("No changes are suggested among the players who can still move.");
+  },
+);
+
+it("keeps complete-total wording when no locked forecast is missing", () => {
+  expect(
+    answerForLineup({
+      state: "available",
+      feasible: true,
+      currentProjectedPoints: 100,
+      optimalProjectedPoints: 100,
+      changes: [],
+    }),
+  ).toBe(
+    "Your starters have the highest total under these projections. Your current lineup projects 100; the proposed one projects 100.",
+  );
+});
+
 it.each(["unrated", undefined])(
   "does not turn a %s assessment into a confident start instruction",
   (strength) => {
