@@ -22,6 +22,8 @@ import {
   deriveVerifiedPointRosArtifactBlockers,
   firstPartyRosReleaseArtifactChecksum,
 } from "./ros-artifact-blockers.js";
+import { projectionScoringProfileKey } from "./scoring.js";
+import { projectionScoringRulesFromProfileKey } from "./scoring-position-keys.js";
 
 let fixture: ReturnType<typeof pointRosReleaseFixture>;
 beforeAll(() => {
@@ -146,6 +148,24 @@ describe("independently evidenced point-only ROS release", () => {
     });
     expect(decision.state).toBe("withhold");
     expect(decision.reasons).toContain("invalid-mean-selection-evidence");
+  });
+  it("preserves exact per-position scoring reuse while rejecting changes to this position", () => {
+    const rules = projectionScoringRulesFromProfileKey(fixture.live.scoringProfileKey);
+    const changedProfile = (statId: string) =>
+      projectionScoringProfileKey({
+        id: "point-position-matching",
+        rules: rules.map((rule) =>
+          rule.statId === statId ? { ...rule, points: rule.points + 1 } : rule,
+        ),
+      });
+    const unrelated = changedProfile("receptions");
+    expect(unrelated).not.toBe(fixture.live.scoringProfileKey);
+    expect(gate({ ...fixture.live, scoringProfileKey: unrelated }).state).toBe("release");
+    const changed = changedProfile("defensive_sacks");
+    expect(changed).not.toBe(fixture.live.scoringProfileKey);
+    expect(gate({ ...fixture.live, scoringProfileKey: changed }).reasons).toContain(
+      "evidence-identity-mismatch",
+    );
   });
   it("requires exact historical strata, permits only proved full-distribution bounds, and records actual mean failures", () => {
     const input = fixture.buildInput;

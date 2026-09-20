@@ -1,6 +1,7 @@
 import {
   evaluateFirstPartyRosConvergence,
   evaluateFirstPartyRosReleaseGate,
+  evidenceIdentitiesMatchForPosition,
   FIRST_PARTY_ROS_MODEL_VERSION,
   FIRST_PARTY_ROS_POLICY_VERSION,
   type FirstPartyRosChampionPolicy,
@@ -514,7 +515,11 @@ export function evaluateFirstPartyRosPointReleaseGate(input: {
       !qualificationMatchesPolicy(q, input.meanPolicy, input.expectedForecastSeason) ||
       q.position !== input.live.position ||
       q.bucket !== input.live.bucket ||
-      q.scoringProfileKey !== input.live.scoringProfileKey
+      !evidenceIdentitiesMatchForPosition(
+        input.meanPolicy.evidenceIdentity,
+        input.live,
+        input.live.position,
+      )
     )
       reasons.add("point-qualification-mismatch");
     else {
