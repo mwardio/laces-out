@@ -117,7 +117,7 @@ describe("pinned full-portfolio conditional development grading", () => {
     ).toBe("rejected");
   });
 
-  it("preserves the original v1 development report byte checksum after parser extraction", () => {
+  it("preserves the current provider-definition v1 report byte checksum", () => {
     const current = reportFixture(false),
       old = reportFixture(true);
     const candidateReportJson = JSON.stringify(current),
@@ -132,7 +132,7 @@ describe("pinned full-portfolio conditional development grading", () => {
       positions: ["DST"],
     });
     expect(legacy.evidenceChecksum).toBe(
-      "819ba4c624278306d877c2637a6f339741fb073809891ff243dff6de8f09c92f",
+      "b23c92005ec55cd1580c1f193ff6eea1f5e788f19114679dc2defbbbef104930",
     );
   });
 

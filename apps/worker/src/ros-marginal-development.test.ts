@@ -165,9 +165,11 @@ describe("pinned marginal ROS report development wrapper", () => {
     ).toThrow(/invalid provenance checksum/u);
   });
 
-  it("keeps the original v1 payload byte identity when separate training is absent", () => {
+  it("keeps the v1 payload byte identity for the current provider definition without separate training", () => {
+    // The explicit Yahoo PA definition changed the fixture's scoring identity. Frozen benchmark
+    // support must leave this existing native report byte-for-byte unchanged.
     expect(passed.evidenceChecksum).toMatchInlineSnapshot(
-      `"819ba4c624278306d877c2637a6f339741fb073809891ff243dff6de8f09c92f"`,
+      `"b23c92005ec55cd1580c1f193ff6eea1f5e788f19114679dc2defbbbef104930"`,
     );
     expect(passed.schemaVersion).toBe(1);
     expect(passed).not.toHaveProperty("intervalTraining");

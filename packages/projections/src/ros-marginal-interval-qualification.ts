@@ -29,6 +29,7 @@ import {
   type FirstPartyRosStrategy,
 } from "./rest-of-season.js";
 import { sha256Hex } from "./sha256.js";
+import { buildFrozenRosBenchmark, type FrozenRosBenchmarkInput } from "./frozen-ros-benchmark.js";
 
 export const ROS_MARGINAL_INTERVAL_QUALIFICATION_VERSION = "ros-marginal-interval-qualification-v1";
 const MAX_ROWS = 20_000;
@@ -73,6 +74,8 @@ export interface RosMarginalQualificationInput {
   readonly candidate: RosMarginalQualificationDataset;
   readonly previous: RosMarginalQualificationDataset;
   readonly intervalTraining?: RosMarginalQualificationDataset;
+  /** Explicit original-label fit for a comparison evaluated against corrected observations. */
+  readonly frozenPrevious?: FrozenRosBenchmarkInput;
 }
 
 export type RosMarginalQualificationSetInput = Omit<RosMarginalQualificationInput, "cell">;
@@ -302,7 +305,11 @@ function observed(row: FirstPartyRosHeldOutForecast, playerId = row.playerId) {
 }
 
 function prepare(input: RosMarginalQualificationSetInput) {
-  object(input, ["forecastSeason", "scope", "candidate", "previous"], ["intervalTraining"]);
+  object(
+    input,
+    ["forecastSeason", "scope", "candidate", "previous"],
+    ["intervalTraining", "frozenPrevious"],
+  );
   object(input.scope, [
     "sourceSeasons",
     "requiredCells",
@@ -379,12 +386,34 @@ function prepare(input: RosMarginalQualificationSetInput) {
     [...requiredCellKeys].sort(),
     "candidate corpus does not cover the exact required cell scope",
   );
+  if (input.frozenPrevious !== undefined) {
+    object(input.frozenPrevious, ["original", "comparisonManifestChecksum"]);
+    digest(input.frozenPrevious.comparisonManifestChecksum);
+    object(input.frozenPrevious.original, [
+      "source",
+      "sourceManifestChecksum",
+      "rowsChecksum",
+      "heldOutSeasons",
+    ]);
+    // The original forecast has its own authenticated source manifest. Keep the same bounded
+    // row/schema validation and exact season scope before traversing its forecast evidence.
+    dataset(input.frozenPrevious.original, {
+      ...scope,
+      sourceManifestChecksum: input.frozenPrevious.original.sourceManifestChecksum,
+    });
+  }
   const marginal = evaluateFirstPartyRosMarginalPolicy(candidate.ordered, {
     forecastSeason: input.forecastSeason,
     championOptions: MEAN_OPTIONS,
     ...(training === null ? {} : { intervalTrainingSeasons: training.ordered }),
   });
-  const oldPolicy = evaluateRetainedV12FirstPartyRosChampionPolicy(previous.ordered, MEAN_OPTIONS);
+  const frozenPrevious =
+    input.frozenPrevious === undefined
+      ? null
+      : buildFrozenRosBenchmark(input.frozenPrevious, input.previous, MEAN_OPTIONS);
+  const oldPolicy =
+    frozenPrevious?.evaluation ??
+    evaluateRetainedV12FirstPartyRosChampionPolicy(previous.ordered, MEAN_OPTIONS);
   return {
     input,
     candidate,
@@ -392,6 +421,7 @@ function prepare(input: RosMarginalQualificationSetInput) {
     training,
     marginal,
     oldPolicy,
+    frozenPrevious,
     cells: [...scope.requiredCells].sort((a, b) => cellKey(a).localeCompare(cellKey(b))),
     requiredSeasons: scope.sourceSeasons.slice(1),
     comparisonSeason: scope.sourceSeasons.at(-1)!,
@@ -447,6 +477,7 @@ function build(prepared: Prepared, cell: MarginalIntervalComparisonCell) {
     training,
     marginal,
     oldPolicy,
+    frozenPrevious,
     requiredSeasons,
     comparisonSeason,
   } = prepared;
@@ -698,6 +729,7 @@ function build(prepared: Prepared, cell: MarginalIntervalComparisonCell) {
     meanSelectorOptions: { ...MEAN_OPTIONS },
     meanChoice: choice.meanChoice,
     previousMeanChoice: previousChoice,
+    ...(frozenPrevious === null ? {} : { frozenPrevious: frozenPrevious.binding }),
     sourceScope: input.scope,
     sources: {
       candidate: binding(candidate),
@@ -725,7 +757,11 @@ export type RosMarginalIntervalQualification = ReturnType<typeof build>;
 export function buildRosMarginalIntervalQualification(
   input: RosMarginalQualificationInput,
 ): RosMarginalIntervalQualification {
-  object(input, ["cell", "forecastSeason", "scope", "candidate", "previous"], ["intervalTraining"]);
+  object(
+    input,
+    ["cell", "forecastSeason", "scope", "candidate", "previous"],
+    ["intervalTraining", "frozenPrevious"],
+  );
   cellKey(input.cell);
   const { cell, ...shared } = input;
   return build(prepare(shared), cell);

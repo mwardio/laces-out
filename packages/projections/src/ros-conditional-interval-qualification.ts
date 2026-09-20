@@ -39,6 +39,7 @@ import {
 } from "./rest-of-season.js";
 import { projectionScoringRulesFromProfileKey } from "./scoring-position-keys.js";
 import { sha256Hex } from "./sha256.js";
+import { buildFrozenRosBenchmark, type FrozenRosBenchmarkInput } from "./frozen-ros-benchmark.js";
 
 export const ROS_CONDITIONAL_INTERVAL_QUALIFICATION_VERSION =
   "ros-conditional-interval-qualification-v1";
@@ -53,6 +54,8 @@ export interface RosConditionalIntervalQualificationInput {
   readonly previous: RosMarginalQualificationDataset;
   /** Complete authenticated physical superset, not the DST-only report on its own. */
   readonly intervalTraining?: RosMarginalQualificationDataset;
+  /** Original fitted benchmark, evaluated against the corrected observations in previous. */
+  readonly frozenPrevious?: FrozenRosBenchmarkInput;
 }
 function fail(message: string): never {
   throw new Error(`Conditional qualification: ${message}`);
@@ -187,7 +190,11 @@ function observation(row: FirstPartyRosHeldOutForecast, playerId = row.playerId)
   ];
 }
 function prepare(supplied: RosConditionalIntervalQualificationInput) {
-  object(supplied, ["forecastSeason", "scope", "candidate", "previous"], ["intervalTraining"]);
+  object(
+    supplied,
+    ["forecastSeason", "scope", "candidate", "previous"],
+    ["intervalTraining", "frozenPrevious"],
+  );
   object(supplied.scope, [
     "sourceSeasons",
     "requiredCells",
@@ -223,6 +230,18 @@ function prepare(supplied: RosConditionalIntervalQualificationInput) {
   if (new Set(cells.map(cellKey)).size !== cells.length) fail("duplicate declared cell");
   const candidate = dataset(input.candidate, scope, FIRST_PARTY_ROS_MODEL_VERSION);
   const previous = dataset(input.previous, scope, RETAINED_MODEL);
+  if (input.frozenPrevious !== undefined) {
+    object(input.frozenPrevious, ["original", "comparisonManifestChecksum"]);
+    digest(input.frozenPrevious.comparisonManifestChecksum);
+    dataset(
+      input.frozenPrevious.original,
+      {
+        ...scope,
+        sourceManifestChecksum: input.frozenPrevious.original.sourceManifestChecksum,
+      },
+      RETAINED_MODEL,
+    );
+  }
   const training =
     input.intervalTraining === undefined
       ? null
@@ -273,10 +292,20 @@ function prepare(supplied: RosConditionalIntervalQualificationInput) {
     forecastSeason: input.forecastSeason,
     ...(training === null ? {} : { intervalTrainingSeasons: training.ordered }),
   });
-  const retained = evaluateRetainedV12FirstPartyRosChampionPolicy(
-    previous.ordered,
-    evaluation.meanSelectorOptions,
-  );
+  const frozenPrevious =
+    input.frozenPrevious === undefined
+      ? null
+      : buildFrozenRosBenchmark(
+          input.frozenPrevious,
+          input.previous,
+          evaluation.meanSelectorOptions,
+        );
+  const retained =
+    frozenPrevious?.evaluation ??
+    evaluateRetainedV12FirstPartyRosChampionPolicy(
+      previous.ordered,
+      evaluation.meanSelectorOptions,
+    );
   return {
     input,
     cells,
@@ -285,6 +314,7 @@ function prepare(supplied: RosConditionalIntervalQualificationInput) {
     training,
     evaluation,
     retained,
+    frozenPrevious,
     requiredYears: scope.sourceSeasons.slice(1),
     comparisonYear: scope.sourceSeasons.at(-1)!,
   };
@@ -640,6 +670,7 @@ export function buildRosConditionalIntervalQualification(
     // Keep original diagnostics and selected means; interval qualification does not waive them.
     legacyMeanEvaluation: p.evaluation.legacyEvaluation,
     retainedMeanEvaluation: p.retained,
+    ...(p.frozenPrevious === null ? {} : { frozenPrevious: p.frozenPrevious.binding }),
     warmup: p.evaluation.candidates.filter((row) => !p.requiredYears.includes(row.forecastSeason)),
     reasons,
   };

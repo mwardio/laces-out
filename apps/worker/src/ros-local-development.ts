@@ -27,6 +27,7 @@ import {
 import { LOCAL_ROS_INTERVAL_VERSION } from "../../../packages/projections/src/local-ros-interval-calibration.js";
 import { historicalRosCalibrationBlockers } from "./first-party-ros-backtest.js";
 import { parsePinnedRosMarginalDevelopmentInputs } from "./ros-marginal-development.js";
+import type { RosDerivedEvaluationInput } from "./ros-derived-evaluation.js";
 
 export const ROS_LOCAL_DEVELOPMENT_VERSION = "pinned-full-portfolio-local-development-v2";
 export const ROS_LOCAL_EVIDENCE_VERSION = "local-prior-fit-marginal-evidence-v2";
@@ -72,6 +73,7 @@ export interface RosLocalDevelopmentInput {
   readonly previousReportChecksum: string;
   readonly intervalTrainingReportJson: string;
   readonly intervalTrainingReportChecksum: string;
+  readonly derivedEvaluation?: RosDerivedEvaluationInput;
   /** Exact frozen text, including whitespace; code/build pins belong to the execution manifest. */
   readonly protocolText: string;
   readonly protocolChecksum: string;
@@ -751,6 +753,9 @@ export function buildRosLocalDevelopmentReport(input: RosLocalDevelopmentInput) 
     candidateReportChecksum: input.candidateReportChecksum,
     previousReportJson: input.previousReportJson,
     previousReportChecksum: input.previousReportChecksum,
+    ...(input.derivedEvaluation === undefined
+      ? {}
+      : { derivedEvaluation: input.derivedEvaluation }),
     ...(input.intervalTrainingReportJson === undefined
       ? {}
       : { intervalTrainingReportJson: input.intervalTrainingReportJson }),
@@ -1047,6 +1052,9 @@ export function buildRosLocalDevelopmentReport(input: RosLocalDevelopmentInput) 
     provenance: {
       candidate: parsed.candidate.source,
       previous: parsed.previous.source,
+      ...(parsed.derivedEvaluation === null
+        ? {}
+        : { derivedEvaluation: parsed.derivedEvaluation.lineage }),
       sourceManifestChecksum: input.sourceManifestChecksum,
       sources: parsed.candidate.sources,
       scoringProfileKey: input.scoringProfileKey,
@@ -1064,7 +1072,7 @@ export function buildRosLocalDevelopmentReport(input: RosLocalDevelopmentInput) 
     trainingDiagnostics,
     legacyReports: {
       candidate: parsed.candidate.report,
-      previous: parsed.previous.report,
+      previous: parsed.originalPrevious?.report ?? parsed.previous.report,
       training: parsed.training?.report ?? null,
     },
     localDevelopment: {

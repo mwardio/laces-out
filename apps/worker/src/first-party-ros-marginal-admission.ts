@@ -18,6 +18,7 @@ import {
   type FirstPartyRosChampionArtifactPayload,
 } from "./first-party-ros-publication.js";
 import { buildRosMarginalDevelopmentReport } from "./ros-marginal-development.js";
+import type { RosDerivedEvaluationInput } from "./ros-derived-evaluation.js";
 
 export const FIRST_PARTY_ROS_MARGINAL_ADMISSION_VERSION = "first-party-ros-marginal-admission-v1";
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
@@ -46,6 +47,7 @@ export interface FirstPartyRosMarginalAdmissionInput {
   /** Pinned complete32-defense training; composed with the unchanged non-defense audit rows. */
   readonly intervalTrainingReportJson?: string;
   readonly intervalTrainingReportChecksum?: string;
+  readonly derivedEvaluation?: RosDerivedEvaluationInput;
 }
 
 function reject(...blockers: string[]): FirstPartyRosAdmissionValidation {
@@ -191,6 +193,9 @@ export function prepareFirstPartyRosMarginalAdmission(
       evaluationSeason: evidenceThroughSeason,
       positions: POSITIONS,
       qualificationProtocolChecksum: input.qualificationProtocolChecksum,
+      ...(input.derivedEvaluation === undefined
+        ? {}
+        : { derivedEvaluation: input.derivedEvaluation }),
       ...(input.intervalTrainingReportJson === undefined
         ? {}
         : {
@@ -268,6 +273,18 @@ export function prepareFirstPartyRosMarginalAdmission(
       fail("marginal_admission_unrequested_training_composition");
     }
     for (const receipt of qualifications) {
+      if (input.derivedEvaluation === undefined) {
+        if (receipt.frozenPrevious !== undefined)
+          fail("marginal_admission_unrequested_frozen_benchmark");
+      } else if (
+        receipt.frozenPrevious?.comparisonManifestChecksum !==
+          input.derivedEvaluation.comparisonManifestChecksum ||
+        receipt.frozenPrevious.original.source.reportChecksum !==
+          input.derivedEvaluation.originalPreviousReportChecksum ||
+        receipt.frozenPrevious.correctedObservations.source.reportChecksum !==
+          input.previousReportChecksum
+      )
+        fail("marginal_admission_frozen_benchmark_binding_mismatch");
       if (
         receipt.forecastSeason !== input.forecastSeason ||
         receipt.comparisonSeason !== evidenceThroughSeason ||
@@ -392,6 +409,16 @@ export function prepareFirstPartyRosMarginalAdmission(
             candidateReportChecksum: input.candidateReportChecksum,
             previousReportChecksum: input.previousReportChecksum,
             qualificationProtocolChecksum: input.qualificationProtocolChecksum,
+            ...(input.derivedEvaluation === undefined
+              ? {}
+              : {
+                  derivedComparisonManifestChecksum:
+                    input.derivedEvaluation.comparisonManifestChecksum,
+                  originalCandidateReportChecksum:
+                    input.derivedEvaluation.originalCandidateReportChecksum,
+                  originalPreviousReportChecksum:
+                    input.derivedEvaluation.originalPreviousReportChecksum,
+                }),
             ...(input.intervalTrainingReportChecksum === undefined
               ? {}
               : { intervalTrainingReportChecksum: input.intervalTrainingReportChecksum }),
@@ -399,6 +426,11 @@ export function prepareFirstPartyRosMarginalAdmission(
           protocolText,
           sourceAudit,
           sourceAuditChecksum,
+          ...(development.provenance.derivedEvaluation === undefined
+            ? {}
+            : {
+                derivedEvaluation: development.provenance.derivedEvaluation,
+              }),
           developmentEvidenceChecksum: development.evidenceChecksum,
           developmentReportChecksum: development.qualification.developmentReportChecksum,
           legacyArtifactChecksum: legacy.artifactChecksum,

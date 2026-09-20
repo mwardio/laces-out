@@ -14,6 +14,9 @@ import {
   evaluateRetainedV12FirstPartyRosChampionPolicy,
   evaluateFirstPartyRosMarginalPolicy,
   buildRosMarginalIntervalQualificationSet,
+  buildFrozenRosBenchmark,
+  type FrozenRosBenchmarkInput,
+  type RosMarginalQualificationDataset,
   validateMarginalRosTrainingCohort,
   type FirstPartyRosChampionOptions,
   type FirstPartyRosHeldOutForecast,
@@ -26,6 +29,10 @@ import {
   type MarginalRosCandidateEvaluation,
 } from "@laces-out/projections";
 import { firstPartyRosChampionPolicyChecksum } from "./first-party-ros-publication.js";
+import {
+  validateRosDerivedEvaluation,
+  type RosDerivedEvaluationInput,
+} from "./ros-derived-evaluation.js";
 
 export const ROS_MARGINAL_DEVELOPMENT_VERSION = "pinned-report-marginal-development-v1";
 export const ROS_MARGINAL_TRAINING_DEVELOPMENT_VERSION =
@@ -485,6 +492,8 @@ export interface PinnedRosMarginalDevelopmentInput {
   readonly positions: readonly FirstPartyRosPosition[];
   /** Explicit frozen protocol binding; absence preserves the original report byte identity. */
   readonly qualificationProtocolChecksum?: string;
+  /** Explicit corrected-truth comparison; original forecast sources remain separately pinned. */
+  readonly derivedEvaluation?: RosDerivedEvaluationInput;
 }
 
 /** Shared pinned-input authentication only; no marginal or conditional candidate is fitted here. */
@@ -498,16 +507,60 @@ export function parsePinnedRosMarginalDevelopmentInputs(input: PinnedRosMarginal
     (input.intervalTrainingReportChecksum === undefined)
   )
     fail("interval training report and pinned SHA256 must be supplied together");
+  const derivedEvaluation =
+    input.derivedEvaluation === undefined
+      ? null
+      : validateRosDerivedEvaluation({
+          input: input.derivedEvaluation,
+          candidateReportJson: input.candidateReportJson,
+          candidateReportChecksum: input.candidateReportChecksum,
+          previousReportJson: input.previousReportJson,
+          previousReportChecksum: input.previousReportChecksum,
+          intervalTrainingReportJson: input.intervalTrainingReportJson!,
+          intervalTrainingReportChecksum: input.intervalTrainingReportChecksum!,
+        });
   const candidate = snapshot(
     pinnedJson(input.candidateReportJson, input.candidateReportChecksum),
     input.candidateReportChecksum,
     false,
   );
-  const previous = snapshot(
+  let previous = snapshot(
     pinnedJson(input.previousReportJson, input.previousReportChecksum),
     input.previousReportChecksum,
     true,
   );
+  if (
+    derivedEvaluation === null &&
+    (Object.hasOwn(candidate.root, "correctedComparison") ||
+      Object.hasOwn(previous.root, "correctedComparison"))
+  )
+    fail("derived comparisons require their original forecast and corrected observation lineage");
+  const originalPrevious =
+    derivedEvaluation === null
+      ? null
+      : snapshot(
+          derivedEvaluation.originalPreviousReport,
+          input.derivedEvaluation!.originalPreviousReportChecksum,
+          true,
+        );
+  let frozenPrevious: FrozenRosBenchmarkInput | null = null;
+  const previousCounterfactual = originalPrevious === null ? null : previous;
+  if (originalPrevious !== null) {
+    const dataset = (value: typeof previous): RosMarginalQualificationDataset => ({
+      source: value.source,
+      sourceManifestChecksum: createHash("sha256").update(canonical(value.sources)).digest("hex"),
+      heldOutSeasons: value.heldOutSeasons,
+      rowsChecksum: validateMarginalRosTrainingCohort(value.heldOutSeasons, value.heldOutSeasons)
+        .provenance.evaluationRowsChecksum,
+    });
+    frozenPrevious = {
+      original: dataset(originalPrevious),
+      comparisonManifestChecksum: input.derivedEvaluation!.comparisonManifestChecksum,
+    };
+    const frozen = buildFrozenRosBenchmark(frozenPrevious, dataset(previous), previous.options);
+    equal(frozen.evaluation, originalPrevious.legacy, "original previous policy was not preserved");
+    previous = { ...previous, legacy: frozen.evaluation };
+  }
   const training =
     input.intervalTrainingReportJson === undefined
       ? null
@@ -595,13 +648,34 @@ export function parsePinnedRosMarginalDevelopmentInputs(input: PinnedRosMarginal
     ];
     equal(observed(row), observed(old), "all-season outcome/schedule mismatch");
   }
-  return { candidate, previous, training, composite, intervalTraining, positions };
+  return {
+    candidate,
+    previous,
+    training,
+    composite,
+    intervalTraining,
+    positions,
+    originalPrevious,
+    previousCounterfactual,
+    frozenPrevious,
+    derivedEvaluation,
+  };
 }
 
 /** Development evidence deliberately has no root publicationPolicy/champion/report admission shape. */
 export function buildRosMarginalDevelopmentReport(input: PinnedRosMarginalDevelopmentInput) {
-  const { candidate, previous, training, composite, intervalTraining, positions } =
-    parsePinnedRosMarginalDevelopmentInputs(input);
+  const {
+    candidate,
+    previous,
+    training,
+    composite,
+    intervalTraining,
+    positions,
+    originalPrevious,
+    previousCounterfactual,
+    frozenPrevious,
+    derivedEvaluation,
+  } = parsePinnedRosMarginalDevelopmentInputs(input);
   const marginal = evaluateFirstPartyRosMarginalPolicy(candidate.heldOutSeasons, {
     forecastSeason: input.forecastSeason,
     championOptions: candidate.options,
@@ -823,15 +897,25 @@ export function buildRosMarginalDevelopmentReport(input: PinnedRosMarginalDevelo
       previous: previous.source,
       sources: candidate.sources,
       sourceComponentEquivalence: "requires-separate-pinned-source-preflight",
+      ...(derivedEvaluation === null ? {} : { derivedEvaluation: derivedEvaluation.lineage }),
       ...(intervalTraining === null ? {} : { intervalTraining: intervalTraining.source }),
       ...(composite === null ? {} : { intervalTrainingComposition: composite.manifest }),
     },
     legacyEvaluation: {
       candidatePolicy: candidate.root.publicationPolicy,
-      previousPolicy: previous.root.publicationPolicy,
+      previousPolicy: originalPrevious?.root.publicationPolicy ?? previous.root.publicationPolicy,
       preservedLegacyBlockers,
       candidateReport: candidate.report,
-      previousReport: previous.report,
+      previousReport: originalPrevious?.report ?? previous.report,
+      ...(previousCounterfactual === null
+        ? {}
+        : {
+            refittedPreviousCounterfactual: {
+              interpretation: "diagnostic-only-not-previous-deployed",
+              policy: previousCounterfactual.legacy.livePolicy,
+              report: previousCounterfactual.report,
+            },
+          }),
       physicalBlockers: candidate.physicalBlockers,
       ...(training === null
         ? {}
@@ -881,6 +965,7 @@ export function buildRosMarginalDevelopmentReport(input: PinnedRosMarginalDevelo
     },
     candidate: qualificationDataset(candidate),
     previous: qualificationDataset(previous),
+    ...(frozenPrevious === null ? {} : { frozenPrevious }),
     ...(intervalTraining === null
       ? {}
       : { intervalTraining: qualificationDataset(intervalTraining) }),

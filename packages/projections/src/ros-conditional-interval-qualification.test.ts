@@ -125,6 +125,43 @@ function forge(value: typeof receipt) {
 }
 
 describe("raw-source conditional interval qualification", () => {
+  it("freezes the original benchmark policy when historical observed values are corrected", () => {
+    const corrected = structuredClone(pinned);
+    for (const source of [corrected.candidate, corrected.previous]) {
+      const years = source.heldOutSeasons.map((year) => ({
+        ...year,
+        forecasts: year.forecasts.map((row) => ({ ...row, actualPoints: row.actualPoints + 20 })),
+      }));
+      Object.assign(source, {
+        heldOutSeasons: years,
+        rowsChecksum: validateMarginalRosTrainingCohort(years, years).provenance
+          .evaluationRowsChecksum,
+      });
+    }
+    const frozenPrevious = {
+      original: pinned.previous,
+      comparisonManifestChecksum: sha256Hex("corrected-truth-lineage"),
+    };
+    const qualified = buildRosConditionalIntervalQualification({ ...corrected, frozenPrevious });
+    expect(qualified.retainedMeanEvaluation).toEqual(receipt.retainedMeanEvaluation);
+    expect(qualified.frozenPrevious?.original.rowsChecksum).toBe(pinned.previous.rowsChecksum);
+    expect(qualified.frozenPrevious?.correctedObservations.rowsChecksum).toBe(
+      corrected.previous.rowsChecksum,
+    );
+    const changed = structuredClone(corrected.previous);
+    const first = changed.heldOutSeasons[0]!.forecasts[0]!;
+    Object.assign(first.contextual, { meanPoints: first.contextual.meanPoints + 1 });
+    Object.assign(changed, {
+      rowsChecksum: validateMarginalRosTrainingCohort(
+        changed.heldOutSeasons,
+        changed.heldOutSeasons,
+      ).provenance.evaluationRowsChecksum,
+    });
+    expect(() =>
+      buildRosConditionalIntervalQualification({ ...corrected, previous: changed, frozenPrevious }),
+    ).toThrow(/changed an original forecast/u);
+  });
+
   it("reconstructs both strategies, prior-only fits and a usable certified live artifact", () => {
     expect(receipt.state).toBe("qualified-interval-evidence");
     expect(receipt.canAuthorizeRelease).toBe(false);
