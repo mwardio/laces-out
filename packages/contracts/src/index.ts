@@ -2347,6 +2347,7 @@ const managedProjectionDetailsSchema = z
     scoringCompatibility: z.enum(["current", "changed", "unknown"]).optional(),
     // Absent on older cached payloads. A missing descriptor means the method is unverified.
     rosInterval: rosIntervalDescriptorSchema.nullable().optional(),
+    rosForecastKind: z.enum(["point-only", "calibrated-distribution"]).nullable().optional(),
     modelVersion: z.string().min(1).max(120).nullable(),
     computedAt: z.iso.datetime(),
     inputCheckedAt: z.iso.datetime(),
@@ -2412,6 +2413,20 @@ export const projectionSetSummarySchema = z
   })
   .strict()
   .superRefine((value, context) => {
+    if (value.managed?.rosForecastKind === "point-only" && value.horizon !== "rest-of-season") {
+      context.addIssue({
+        code: "custom",
+        path: ["managed", "rosForecastKind"],
+        message: "Point ROS evidence requires a rest-of-season forecast",
+      });
+    }
+    if (value.managed?.rosForecastKind === "point-only" && value.managed.rosInterval != null) {
+      context.addIssue({
+        code: "custom",
+        path: ["managed", "rosInterval"],
+        message: "Point forecasts cannot claim calibrated intervals",
+      });
+    }
     if (
       (value.horizon === "week" && value.week === null) ||
       (value.horizon === "rest-of-season" && value.week !== null)
@@ -2433,11 +2448,25 @@ export const projectionPlayerRosSummarySchema = z
     asOfAt: z.iso.datetime(),
     scheduledGames: z.number().int().min(0).max(25),
     expectedGames: z.number().min(0).max(25),
-    medianPoints: z.number().min(-2_500).max(5_000),
+    forecastKind: z.enum(["point-only", "calibrated-distribution"]).optional(),
+    medianPoints: z.number().min(-2_500).max(5_000).nullable(),
     meanPointsPerExpectedGame: z.number().min(-100).max(200).nullable(),
-    pointsStddev: z.number().min(0).max(1_000),
+    pointsStddev: z.number().min(0).max(1_000).nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const point = value.forecastKind === "point-only";
+    if (
+      point
+        ? value.medianPoints !== null || value.pointsStddev !== null
+        : value.medianPoints === null || value.pointsStddev === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Only explicit point forecasts omit distribution summaries",
+      });
+    }
+  });
 export type ProjectionPlayerRosSummary = z.infer<typeof projectionPlayerRosSummarySchema>;
 
 export const projectionPlayerRowSchema = z
@@ -2456,7 +2485,15 @@ export const projectionPlayerRowSchema = z
     confidence: z.number().min(0).max(1).nullable(),
     ros: projectionPlayerRosSummarySchema.nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.ros?.forecastKind === "point-only" &&
+      (value.floorPoints !== null || value.ceilingPoints !== null)
+    ) {
+      context.addIssue({ code: "custom", message: "Point forecasts cannot claim interval bounds" });
+    }
+  });
 export type ProjectionPlayerRow = z.infer<typeof projectionPlayerRowSchema>;
 
 export const projectionPlayerListResponseSchema = z
@@ -2464,7 +2501,30 @@ export const projectionPlayerListResponseSchema = z
     projectionSet: projectionSetSummarySchema,
     players: z.array(projectionPlayerRowSchema).max(5_000),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const kind = value.projectionSet.managed?.rosForecastKind;
+    if (
+      kind === "point-only" &&
+      value.players.some((player) => player.ros?.forecastKind !== "point-only")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["players"],
+        message: "Every player in a point forecast requires its point-only summary",
+      });
+    }
+    if (
+      kind !== "point-only" &&
+      value.players.some((player) => player.ros?.forecastKind === "point-only")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["projectionSet", "managed", "rosForecastKind"],
+        message: "Point rows require verified point forecast metadata",
+      });
+    }
+  });
 export type ProjectionPlayerListResponse = z.infer<typeof projectionPlayerListResponseSchema>;
 
 export const projectionSetListResponseSchema = z

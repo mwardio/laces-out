@@ -88,6 +88,11 @@ export interface FirstPartyRosPlayerIntervalCalibration {
   readonly calibrationArtifactChecksum: string;
   readonly releaseEvidenceChecksum: string;
 }
+/** Immutable point forecast scope; it cannot represent interval calibration. */
+export type FirstPartyRosPlayerPointEvidence = Omit<
+  FirstPartyRosPlayerIntervalCalibration,
+  "calibrationArtifactChecksum"
+>;
 export type AdpScoringFormat = "standard" | "half-ppr" | "ppr";
 export type AdpRosterFormat = "one-qb" | "superflex" | "two-qb" | "unknown";
 export type LeagueSupplementalKind =
@@ -1907,6 +1912,8 @@ export const projectionModelRuns = pgTable(
     calibration: jsonb("calibration").$type<Record<string, unknown>>().notNull(),
     /** DB-derived only: schema2 validation succeeded before the immutable run was inserted. */
     marginalIntervalContractVersion: integer("marginal_interval_contract_version").$type<2>(),
+    /** DB-derived only: the distinct point-only admission and run proof were validated. */
+    pointForecastContractVersion: integer("point_forecast_contract_version").$type<1>(),
     metrics: jsonb("metrics").$type<Record<string, unknown>>().notNull(),
     sourceAsOf: timestamp("source_as_of", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1962,6 +1969,10 @@ export const projectionModelRuns = pgTable(
     ),
     check("projection_model_runs_checksum_check", sql`${table.inputChecksum} ~ '^[a-f0-9]{64}$'`),
     check(
+      "projection_model_runs_point_contract_check",
+      sql`${table.pointForecastContractVersion} is null or (${table.pointForecastContractVersion} = 1 and ${table.marginalIntervalContractVersion} is null)`,
+    ),
+    check(
       "projection_model_runs_marginal_contract_check",
       sql`${table.marginalIntervalContractVersion} is null or ${table.marginalIntervalContractVersion} = 2`,
     ),
@@ -1995,17 +2006,22 @@ export const playerRosProjectionSummaries = pgTable(
     scheduledGames: integer("scheduled_games").notNull(),
     expectedGames: numeric("expected_games", { precision: 8, scale: 6 }).notNull(),
     aggregateMeanPoints: numeric("aggregate_mean_points", { precision: 10, scale: 3 }).notNull(),
-    p15Points: numeric("p15_points", { precision: 10, scale: 3 }).notNull(),
-    p50Points: numeric("p50_points", { precision: 10, scale: 3 }).notNull(),
-    p85Points: numeric("p85_points", { precision: 10, scale: 3 }).notNull(),
+    p15Points: numeric("p15_points", { precision: 10, scale: 3 }),
+    p50Points: numeric("p50_points", { precision: 10, scale: 3 }),
+    p85Points: numeric("p85_points", { precision: 10, scale: 3 }),
     meanPointsPerExpectedGame: numeric("mean_points_per_expected_game", {
       precision: 12,
       scale: 6,
     }),
-    pointsStddev: numeric("points_stddev", { precision: 10, scale: 3 }).notNull(),
+    pointsStddev: numeric("points_stddev", { precision: 10, scale: 3 }),
     availability: jsonb("availability").$type<FirstPartyRosAvailabilitySnapshot>().notNull(),
     intervalCalibration:
       jsonb("interval_calibration").$type<FirstPartyRosPlayerIntervalCalibration>(),
+    forecastKind: text("forecast_kind")
+      .$type<"calibrated-distribution" | "point-only">()
+      .notNull()
+      .default("calibrated-distribution"),
+    pointEvidence: jsonb("point_evidence").$type<FirstPartyRosPlayerPointEvidence>(),
     scenarioCount: integer("scenario_count").notNull(),
     methodVersion: text("method_version").notNull(),
     seedHash: text("seed_hash").notNull(),
@@ -2044,7 +2060,7 @@ export const playerRosProjectionSummaries = pgTable(
     ),
     check(
       "player_ros_projection_summaries_distribution_check",
-      sql`${table.aggregateMeanPoints} between -2500 and 5000 and ${table.p15Points} between -2500 and ${table.p50Points} and ${table.p50Points} <= ${table.p85Points} and ${table.p85Points} <= 5000 and ${table.pointsStddev} between 0 and 1000 and ((${table.expectedGames} = 0 and ${table.aggregateMeanPoints} = 0 and ${table.p15Points} = 0 and ${table.p50Points} = 0 and ${table.p85Points} = 0 and ${table.pointsStddev} = 0 and ${table.meanPointsPerExpectedGame} is null) or (${table.expectedGames} > 0 and ${table.meanPointsPerExpectedGame} between -100 and 200 and abs((${table.meanPointsPerExpectedGame} * ${table.expectedGames}) - ${table.aggregateMeanPoints}) <= 0.001))`,
+      sql`${table.aggregateMeanPoints} between -2500 and 5000 and ((${table.expectedGames} = 0 and ${table.aggregateMeanPoints} = 0 and ${table.meanPointsPerExpectedGame} is null) or (${table.expectedGames} > 0 and ${table.meanPointsPerExpectedGame} is not null and ${table.meanPointsPerExpectedGame} between -100 and 200 and abs((${table.meanPointsPerExpectedGame} * ${table.expectedGames}) - ${table.aggregateMeanPoints}) <= 0.001)) and ((${table.forecastKind} = 'point-only' and ${table.p15Points} is null and ${table.p50Points} is null and ${table.p85Points} is null and ${table.pointsStddev} is null and ${table.intervalCalibration} is null and ${table.pointEvidence} is not null) or (${table.forecastKind} = 'calibrated-distribution' and ${table.pointEvidence} is null and ${table.p15Points} is not null and ${table.p50Points} is not null and ${table.p85Points} is not null and ${table.pointsStddev} is not null and ${table.p15Points} between -2500 and ${table.p50Points} and ${table.p50Points} <= ${table.p85Points} and ${table.p85Points} <= 5000 and ${table.pointsStddev} between 0 and 1000 and (${table.expectedGames} > 0 or (${table.p15Points} = 0 and ${table.p50Points} = 0 and ${table.p85Points} = 0 and ${table.pointsStddev} = 0))))`,
     ),
     check(
       "player_ros_projection_summaries_availability_check",
