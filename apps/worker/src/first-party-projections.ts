@@ -137,8 +137,9 @@ const projectionCheckIntervalMinutes = 60;
 const historySeasonCount = 4;
 // v7 refuses publication when prior-week schedule or statistics coverage is unresolved.
 const sourceSchemaVersion = 7;
+// v8 isolates unavailable locked D/ST rows from otherwise publishable forecasts.
 export const FIRST_PARTY_PUBLICATION_POLICY_VERSION =
-  "walk-forward-expected-mean-conditional-interval-v7";
+  "walk-forward-expected-mean-conditional-interval-v8";
 const championPolicyVersion = FIRST_PARTY_PUBLICATION_POLICY_VERSION;
 const chunkSize = 500;
 const supportedPositions = ["QB", "RB", "WR", "TE", "K"] as const;
@@ -327,7 +328,7 @@ export interface WithheldLeague {
  */
 export interface LeaguePublicationNote {
   readonly leagueSeasonId: string;
-  readonly code: "pre-draft-roster";
+  readonly code: "pre-draft-roster" | "locked-defense-forecast-unavailable";
   readonly message: string;
 }
 
@@ -4187,6 +4188,8 @@ export function buildFirstPartyLeaguePublications(input: {
       input.previousRowsByLeague.get(league.id) ?? new Map<string, ScoredProjectionRow>();
     const lockedRosterWithoutBaseline: string[] = [];
     const lockedRosterScoringIncomplete: string[] = [];
+    const lockedDefenseWithoutBaseline: string[] = [];
+    const lockedDefenseScoringIncomplete: string[] = [];
     let frozenPlayerCount = 0;
     const frozenPlayerIds = new Set<string>();
     for (const player of leaguePlayers) {
@@ -4291,7 +4294,7 @@ export function buildFirstPartyLeaguePublications(input: {
             frozenPlayerCount += 1;
             frozenPlayerIds.add(outputPlayerId);
           } else if (leagueRosterIds.has(outputPlayerId)) {
-            (previous ? lockedRosterScoringIncomplete : lockedRosterWithoutBaseline).push(
+            (previous ? lockedDefenseScoringIncomplete : lockedDefenseWithoutBaseline).push(
               outputPlayerId,
             );
           }
@@ -4318,6 +4321,27 @@ export function buildFirstPartyLeaguePublications(input: {
         rowPositions.set(outputPlayerId, "DST");
       }
     }
+    // Never replace an incompatible pre-kickoff D/ST forecast after kickoff. Omit only that
+    // row, retaining valid defenses and offensive forecasts for the rest of the league. Consumers
+    // must preserve independently verified locks and disclose incomplete totals for these gaps.
+    const unavailableLockedPlayers = [
+      ...lockedDefenseWithoutBaseline.map((playerId) => ({
+        playerId,
+        position: "DST" as const,
+        reason: "missing-pre-kickoff-forecast" as const,
+      })),
+      ...lockedDefenseScoringIncomplete.map((playerId) => ({
+        playerId,
+        position: "DST" as const,
+        reason: "incompatible-pre-kickoff-scoring" as const,
+      })),
+    ].sort((left, right) => left.playerId.localeCompare(right.playerId));
+    const lockedDefenseReasons =
+      unavailableLockedPlayers.length === 0
+        ? []
+        : [
+            `${unavailableLockedPlayers.length} locked roster D/ST forecast${unavailableLockedPlayers.length === 1 ? " is" : "s are"} unavailable because compatible pre-kickoff evidence is missing. These D/ST cannot be reprojected after kickoff.`,
+          ];
     if (lockedRosterWithoutBaseline.length > 0 || lockedRosterScoringIncomplete.length > 0) {
       withheld.push({
         leagueSeasonId: league.id,
@@ -4342,10 +4366,17 @@ export function buildFirstPartyLeaguePublications(input: {
       withheld.push({
         leagueSeasonId: league.id,
         scope: "league",
-        reasons: ["No safely scored player projections were available."],
+        reasons: ["No safely scored player projections were available.", ...lockedDefenseReasons],
         ...(withheldPositions.length === 0 ? {} : { positions: withheldPositions }),
       });
       continue;
+    }
+    if (unavailableLockedPlayers.length > 0) {
+      notes.push({
+        leagueSeasonId: league.id,
+        code: "locked-defense-forecast-unavailable",
+        message: lockedDefenseReasons.join(" "),
+      });
     }
     // The league publishes, but not for everything it asked for. Recording that here — instead of
     // only in the publication's own metadata — keeps every withholding this run performed visible
@@ -4367,6 +4398,7 @@ export function buildFirstPartyLeaguePublications(input: {
       leagueSeasonId: league.id,
       profileKey,
       roster: leagueRoster.map((player) => player.playerId).sort(),
+      unavailableLockedPlayers,
       frozenRows:
         frozenPlayerCount === 0
           ? []
@@ -4495,6 +4527,7 @@ export function buildFirstPartyLeaguePublications(input: {
           publishedPositionSet.has(position),
         ),
         withheldPositions,
+        unavailableLockedPlayers,
         computedAt: input.now.toISOString(),
         sourceAsOf: input.sourceAsOf.toISOString(),
         inputCheckedAt: input.sourceAsOf.toISOString(),
@@ -4507,6 +4540,7 @@ export function buildFirstPartyLeaguePublications(input: {
           ratio: eligible === 0 ? 0 : scored.size / eligible,
         },
         warnings: [
+          ...lockedDefenseReasons,
           ...normalization.warnings.map((warning) => warning.message),
           ...defenseMethodWarnings,
           availabilityMethodWarning,
