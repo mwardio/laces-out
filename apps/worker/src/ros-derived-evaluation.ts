@@ -719,8 +719,9 @@ export function validateRosDerivedEvaluation(options: {
         : {
             productionIdentityVersion: ROS_DERIVED_PRODUCTION_IDENTITY_VERSION,
             productionPackageIdentity: input.productionPackageChecksum!,
-        productionPackageChecksum: input.productionPackageChecksum!,
-        productionQualificationProtocolChecksum: productionPackage.files[productionPackage.dependencies.qualificationProtocol]!.sha256,
+            productionPackageChecksum: input.productionPackageChecksum!,
+            productionQualificationProtocolChecksum:
+              productionPackage.files[productionPackage.dependencies.qualificationProtocol]!.sha256,
           }),
     },
   });
