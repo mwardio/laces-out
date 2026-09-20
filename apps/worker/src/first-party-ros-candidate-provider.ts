@@ -898,7 +898,6 @@ export interface FirstPartyRosLeagueTargetResult {
 }
 
 interface AcceptedCandidate {
-  readonly candidate: FirstPartyRosCandidate;
   readonly assembled: FirstPartyRosAssembledCandidateInputs;
   readonly released: FirstPartyRosReleasedPlayer;
 }
@@ -970,11 +969,16 @@ export async function buildFirstPartyRosLeagueTargetAsync(
   return step.value;
 }
 
-function* simulateCandidateSteps(
+function* simulateRepresentativeCandidateSteps(
   assembled: FirstPartyRosAssembledCandidateInputs,
+  released: FirstPartyRosReleasedPlayer,
 ): Generator<FirstPartyRosProjectionInput, FirstPartyRosCandidate, FirstPartyRosLiveProjection> {
-  const contextual = yield assembled.contextualInput;
-  const recency = yield assembled.recencyInput;
+  const contextual =
+    released.strategy === "contextual" ? released.projection : yield assembled.contextualInput;
+  const recency =
+    released.strategy === "availability-aware-recency"
+      ? released.projection
+      : yield assembled.recencyInput;
   return simulateFirstPartyRosCandidate(assembled, (input) =>
     input.strategy === "contextual" ? contextual : recency,
   );
@@ -1061,17 +1065,17 @@ function* firstPartyRosLeagueTargetSteps(
         skip(player, "candidate-inputs-unavailable");
         continue;
       }
-      const candidate = yield* simulateCandidateSteps(assembled);
       const choice = input.artifact.policy.choices.find(
         (candidate_) =>
-          candidate_.position === candidate.position && candidate_.bucket === candidate.bucket,
+          candidate_.position === assembled.position && candidate_.bucket === assembled.bucket,
       );
       if (choice === undefined) {
         skip(player, "champion-choice-missing");
         continue;
       }
-      const projection =
-        choice.strategy === "contextual" ? candidate.contextual : candidate.recency;
+      const projection = yield choice.strategy === "contextual"
+        ? assembled.contextualInput
+        : assembled.recencyInput;
       if (projection.state !== "projected" || projection.expectedGames <= 0) {
         skip(
           player,
@@ -1080,11 +1084,10 @@ function* firstPartyRosLeagueTargetSteps(
         continue;
       }
       accepted.push({
-        candidate,
         assembled,
         released: {
           playerId: player.playerId,
-          bucket: candidate.bucket,
+          bucket: assembled.bucket,
           strategy: choice.strategy,
           projection,
         },
@@ -1121,18 +1124,19 @@ function* firstPartyRosLeagueTargetSteps(
       skip(player, "candidate-inputs-unavailable");
       continue;
     }
-    const candidate = yield* simulateCandidateSteps(assembled);
     // The champion policy authorizes exactly one strategy per position/bucket; without a matching
     // choice the player cannot be released (no default, no approximation).
     const choice = input.artifact.policy.choices.find(
       (candidate_) =>
-        candidate_.position === candidate.position && candidate_.bucket === candidate.bucket,
+        candidate_.position === assembled.position && candidate_.bucket === assembled.bucket,
     );
     if (choice === undefined) {
       skip(player, "champion-choice-missing");
       continue;
     }
-    const projection = choice.strategy === "contextual" ? candidate.contextual : candidate.recency;
+    const projection = yield choice.strategy === "contextual"
+      ? assembled.contextualInput
+      : assembled.recencyInput;
     if (projection.state !== "projected" || projection.expectedGames <= 0) {
       skip(
         player,
@@ -1141,11 +1145,10 @@ function* firstPartyRosLeagueTargetSteps(
       continue;
     }
     accepted.push({
-      candidate,
       assembled,
       released: {
         playerId: player.playerId,
-        bucket: candidate.bucket,
+        bucket: assembled.bucket,
         strategy: choice.strategy,
         projection,
       },
@@ -1158,7 +1161,7 @@ function* firstPartyRosLeagueTargetSteps(
 
   const byBucket = new Map<string, AcceptedCandidate[]>();
   for (const entry of accepted) {
-    const key = `${entry.candidate.position}:${entry.candidate.bucket}`;
+    const key = `${entry.assembled.position}:${entry.assembled.bucket}`;
     const rows = byBucket.get(key) ?? [];
     rows.push(entry);
     byBucket.set(key, rows);
@@ -1171,6 +1174,13 @@ function* firstPartyRosLeagueTargetSteps(
       left.released.playerId.localeCompare(right.released.playerId),
     );
     const representative = ordered[0]!;
+    // The policy selects one strategy for every player. Only this deterministic representative's
+    // alternate strategy is consumed by the unchanged paired release/convergence evidence.
+    // Reuse its already-computed selected release, preserving every input, seed and output.
+    const representativeCandidate = yield* simulateRepresentativeCandidateSteps(
+      representative.assembled,
+      representative.released,
+    );
     // The representative's release runs are already simulated at exactly this path count, so the
     // diagnostic compares that run against the larger reference instead of re-simulating it. The
     // diagnostic verifies provenance before accepting the reuse.
@@ -1185,7 +1195,7 @@ function* firstPartyRosLeagueTargetSteps(
     };
     const contextualConvergence = diagnoseBoundedFirstPartyRosConvergence({
       projectionInput: representative.assembled.contextualInput,
-      releaseProjection: representative.candidate.contextual,
+      releaseProjection: representativeCandidate.contextual,
       ...scenarioOverrides,
       project: () => contextualReference,
     });
@@ -1195,7 +1205,7 @@ function* firstPartyRosLeagueTargetSteps(
     };
     const recencyConvergence = diagnoseBoundedFirstPartyRosConvergence({
       projectionInput: representative.assembled.recencyInput,
-      releaseProjection: representative.candidate.recency,
+      releaseProjection: representativeCandidate.recency,
       ...scenarioOverrides,
       project: () => recencyReference,
     });
@@ -1215,7 +1225,7 @@ function* firstPartyRosLeagueTargetSteps(
     bucketConvergences.push(
       pointOnly
         ? extractFirstPartyRosPointConvergence({
-            position: representative.candidate.position,
+            position: representative.assembled.position,
             scoringProfileKey,
             diagnostic: selectedConvergence.fullDiagnostic!,
           })
@@ -1223,27 +1233,27 @@ function* firstPartyRosLeagueTargetSteps(
     );
     const meanCoverage = {
       contextual:
-        ordered.reduce((sum, entry) => sum + entry.candidate.coverage.contextual, 0) /
+        ordered.reduce((sum, entry) => sum + entry.assembled.coverage.contextual, 0) /
         ordered.length,
       recency:
-        ordered.reduce((sum, entry) => sum + entry.candidate.coverage.recency, 0) / ordered.length,
+        ordered.reduce((sum, entry) => sum + entry.assembled.coverage.recency, 0) / ordered.length,
     };
     evidence.push({
       ...buildFirstPartyRosLiveReleaseEvidence({
-        position: representative.candidate.position,
-        bucket: representative.candidate.bucket,
-        contextualModelVersion: representative.candidate.contextualModelVersion,
-        recencyModelVersion: representative.candidate.recencyModelVersion,
+        position: representative.assembled.position,
+        bucket: representative.assembled.bucket,
+        contextualModelVersion: representative.assembled.contextualModelVersion,
+        recencyModelVersion: representative.assembled.recencyModelVersion,
         scoringProfileKey,
-        intervalMethodVersion: representative.candidate.intervalMethodVersion,
+        intervalMethodVersion: representative.assembled.intervalMethodVersion,
         inputChecksum: aggregateChecksum(
           "live-ros-bucket-evidence-v1",
-          ordered.map((entry) => entry.candidate.inputChecksum),
+          ordered.map((entry) => entry.assembled.inputChecksum),
         ),
         representative: {
-          scheduledGames: representative.candidate.scheduledGames,
-          contextualExpectedGames: representative.candidate.contextual.expectedGames,
-          recencyExpectedGames: representative.candidate.recency.expectedGames,
+          scheduledGames: representative.assembled.scheduledGames,
+          contextualExpectedGames: representativeCandidate.contextual.expectedGames,
+          recencyExpectedGames: representativeCandidate.recency.expectedGames,
         },
         meanCoverage,
         convergence: {

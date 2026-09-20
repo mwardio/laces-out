@@ -1,5 +1,8 @@
 import {
   evaluateFirstPartyRosChampionPolicy,
+  FIRST_PARTY_ROS_POINT_POLICY_VERSION,
+  rosScoringProfile,
+  runFirstPartyTeamDefenseBacktest,
   normalizeLeagueScoringProfile,
   projectionScoringProfileKey,
   projectFirstPartyRestOfSeason,
@@ -11,6 +14,7 @@ import {
   type FirstPartyTeamDefenseWeeklyStatLine,
   type ProjectionScoringProfile,
 } from "@laces-out/projections";
+import { legacyRosLeagueTarget } from "./first-party-ros-target-reference.test-fixtures.js";
 import * as projectionModules from "@laces-out/projections";
 import { describe, expect, it, vi } from "vitest";
 
@@ -822,6 +826,259 @@ describe("buildFirstPartyRosLeagueTarget", () => {
   function run(input: Parameters<typeof targetInput>[0]) {
     return buildFirstPartyRosLeagueTarget(targetInput(input));
   }
+
+  describe("selected-strategy target equivalence against the retained f178 builder", () => {
+    const positions = ["QB", "RB", "WR", "TE", "K", "DST"] as const;
+    const baseInputs = new Map<string, FirstPartyRosLeagueTargetInput>();
+    const inputFor = (position: (typeof positions)[number], definition = "yahoo-2022-v1") => {
+      const key = `${position}:${definition}`;
+      const hit = baseInputs.get(key);
+      if (hit) return hit;
+      const transformedHistory = history.map((row) => ({
+        ...row,
+        playerId: row.playerId.replace("wr-", `${position.toLowerCase()}-`),
+        position,
+        components: {
+          ...row.components,
+          passing_attempts: 30,
+          passing_completions: 20,
+          passing_yards: 220,
+          passing_touchdowns: 1,
+          passing_interceptions: 1,
+          rushing_attempts: 10,
+          rushing_yards: 45,
+          rushing_touchdowns: 0,
+          field_goals_attempted: 3,
+          field_goals_made: 2,
+          field_goals_made_0_39: 1,
+          field_goals_made_40_49: 1,
+          field_goals_made_50_plus: 0,
+          extra_points_attempted: 3,
+          extra_points_made: 3,
+        },
+      }));
+      let input = targetInput({
+        policy: ninePlusPolicy(position),
+        candidatePlayers: [2, 0, 1].map((index) => ({
+          playerId: `${position.toLowerCase()}-${index}`,
+          position,
+          team: teams[index]!,
+        })),
+        matchedPositions: [position],
+        supportedPositions: [position],
+      });
+      input = {
+        ...input,
+        featureHistory: position === "DST" ? featureHistory : transformedHistory,
+      };
+      if (position === "DST") {
+        const defenseFeatureHistory: FirstPartyTeamDefenseWeeklyStatLine[] = seasons.flatMap(
+          (season) =>
+            Array.from({ length: season === 2026 ? 6 : 16 }, (_, index) =>
+              teams.map((team) => ({
+                team: team === "NEP" ? "NE" : team,
+                season,
+                week: index + 1,
+                opponent: opponentOf(team) === "NEP" ? "NE" : opponentOf(team),
+                pointsAllowedDefinition: definition as "yahoo-2022-v1" | "espn-2019-v1",
+                components: {
+                  defensive_sacks: 2 + (index % 3),
+                  defensive_interceptions: index % 2,
+                  defensive_fumble_recoveries: (index + 1) % 2,
+                  defensive_safeties: 0,
+                  defensive_touchdowns: index % 7 === 0 ? 1 : 0,
+                  defensive_blocked_kicks: 0,
+                  fourth_down_stops: 0,
+                  special_teams_touchdowns: 0,
+                  points_allowed: 17 + (index % 10),
+                  yards_allowed: 290 + index * 3,
+                },
+              })),
+            ).flat(),
+        );
+        input = {
+          ...input,
+          scoringProfile: rosScoringProfile(
+            definition === "yahoo-2022-v1" ? "yahoo-half-ppr" : "espn-standard-2pt",
+          ).profile,
+          defenseFeatureHistory,
+          schedules: schedules.map((row) => ({
+            ...row,
+            homeTeam: row.homeTeam === "NEP" ? "NE" : row.homeTeam,
+            awayTeam: row.awayTeam === "NEP" ? "NE" : row.awayTeam,
+          })),
+          defenseCalibration: runFirstPartyTeamDefenseBacktest(
+            defenseFeatureHistory.filter((row) => row.season < 2026),
+          ).calibration,
+        };
+      }
+      baseInputs.set(key, input);
+      return input;
+    };
+    const cases = positions.flatMap((position) =>
+      [4, 8, 12].flatMap((length) =>
+        (["contextual", "availability-aware-recency"] as const).flatMap((strategy) =>
+          (position === "DST" ? ["yahoo-2022-v1", "espn-2019-v1"] : ["yahoo-2022-v1"]).map(
+            (definition) => ({ position, length, strategy, definition }),
+          ),
+        ),
+      ),
+    );
+    it.each(cases)(
+      "preserves $position/$length/$strategy/$definition targets and removes unused draws",
+      async ({ position, length, strategy, definition }) => {
+        const base = inputFor(position, definition);
+        const input = {
+          ...base,
+          window: {
+            ...base.window,
+            asOfWeek: 18 - length,
+            currentWeek: 19 - length,
+            windowStartWeek: 19 - length,
+          },
+          artifact: {
+            ...base.artifact,
+            policy: {
+              ...base.artifact.policy,
+              choices: base.artifact.policy.choices.map((choice) => ({ ...choice, strategy })),
+            },
+          },
+        };
+        const before = vi.fn(projectFirstPartyRestOfSeason);
+        const expected = legacyRosLeagueTarget(input, before);
+        const after = vi.fn(projectFirstPartyRestOfSeason);
+        const actual = buildFirstPartyRosLeagueTarget(input, after);
+        expect(actual.target?.released).toHaveLength(3);
+        expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+        expect(before).toHaveBeenCalledTimes(8);
+        expect(after).toHaveBeenCalledTimes(6);
+        const alternateCalls = after.mock.calls.filter(
+          ([projection]) => projection.strategy !== strategy && projection.scenarioCount === 128,
+        );
+        expect(alternateCalls.map(([projection]) => projection.playerId)).toEqual([
+          `${position.toLowerCase()}-0`,
+        ]);
+        const asynchronous = await buildFirstPartyRosLeagueTargetAsync(input, async (projection) =>
+          projectFirstPartyRestOfSeason(projection),
+        );
+        expect(JSON.stringify(asynchronous)).toBe(JSON.stringify(expected));
+        const aliases = {
+          aliases: [
+            {
+              playerId: "provider-alias",
+              canonicalPlayerId: `${position.toLowerCase()}-0`,
+              position,
+              team: "BUF",
+              evidence: "gsis" as const,
+            },
+          ],
+          issues: [],
+        };
+        expect(applyFirstPartyRosPlayerAliases(actual.target!, aliases)).toEqual(
+          applyFirstPartyRosPlayerAliases(expected.target!, aliases),
+        );
+      },
+      30_000,
+    );
+
+    it.each([
+      ["WR", "contextual"],
+      ["WR", "availability-aware-recency"],
+      ["DST", "contextual"],
+      ["DST", "availability-aware-recency"],
+    ] as const)(
+      "retains standard-count point evidence for %s/%s with a skipped would-be representative",
+      (position, strategy) => {
+        const base = inputFor(position);
+        const input: FirstPartyRosLeagueTargetInput = {
+          ...base,
+          candidatePlayers: [
+            { playerId: "a-no-games", position, team: "LAR" },
+            ...base.candidatePlayers,
+            base.candidatePlayers[0]!,
+            { playerId: "without-team", position, team: null },
+          ],
+          window: { ...base.window, asOfWeek: 14, currentWeek: 15, windowStartWeek: 15 },
+          scenarioCount: 12_288,
+          convergenceReferenceScenarioCount: 16_384,
+          artifact: {
+            ...base.artifact,
+            policyVersion: FIRST_PARTY_ROS_POINT_POLICY_VERSION,
+            policy: {
+              ...base.artifact.policy,
+              choices: base.artifact.policy.choices.map((choice) => ({ ...choice, strategy })),
+            },
+          },
+        };
+        const expected = legacyRosLeagueTarget(input);
+        const actual = buildFirstPartyRosLeagueTarget(input);
+        expect(actual.target?.released).toHaveLength(3);
+        expect(actual.skippedPlayers).toBe(1);
+        expect(actual.target?.evidence[0]?.pointConvergence).toBeDefined();
+        expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+      },
+      180_000,
+    );
+
+    it.each(["contextual", "availability-aware-recency"] as const)(
+      "preserves both failing convergence records when %s is selected",
+      (strategy) => {
+        const base = inputFor("WR");
+        const input = {
+          ...base,
+          artifact: {
+            ...base.artifact,
+            policy: {
+              ...base.artifact.policy,
+              choices: base.artifact.policy.choices.map((choice) => ({ ...choice, strategy })),
+            },
+          },
+        };
+        const unstable = (projection: FirstPartyRosProjectionInput) => ({
+          ...projectFirstPartyRestOfSeason(projection),
+          expectedGames: 2,
+          meanPoints:
+            100 +
+            (projection.scenarioCount === 128 ? (projection.strategy === "contextual" ? 4 : 6) : 0),
+          p15Points: 80,
+          p50Points: 100,
+          p85Points: 120,
+        });
+        const expected = legacyRosLeagueTarget(input, unstable);
+        const actual = buildFirstPartyRosLeagueTarget(input, unstable);
+        expect(actual.target?.evidence[0]?.convergence.contextual.state).toBe("unstable");
+        expect(actual.target?.evidence[0]?.convergence.recency.state).toBe("unstable");
+        expect(actual.target?.convergence.state).toBe("unstable");
+        expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+      },
+    );
+
+    it("preserves zero and negative scoring, partial input coverage and missing champion exclusions", () => {
+      const base = inputFor("WR");
+      for (const points of [0, -1]) {
+        const input = {
+          ...base,
+          scoringProfile: { id: "unusual-price", rules: [{ statId: "receptions", points }] },
+          candidatePlayers: [
+            { playerId: "a-no-games", position: "WR", team: "LAR" },
+            ...base.candidatePlayers,
+          ],
+          unmatchedCandidateCount: 1,
+        };
+        const expected = legacyRosLeagueTarget(input);
+        const actual = buildFirstPartyRosLeagueTarget(input);
+        expect(actual.target?.released).toHaveLength(3);
+        expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+        const missingChoice = {
+          ...input,
+          artifact: { ...input.artifact, policy: { ...input.artifact.policy, choices: [] } },
+        };
+        expect(buildFirstPartyRosLeagueTarget(missingChoice)).toEqual(
+          legacyRosLeagueTarget(missingChoice),
+        );
+      }
+    }, 20_000);
+  });
 
   function controlledConvergenceProjector(ratio: (input: FirstPartyRosProjectionInput) => number) {
     return async (input: FirstPartyRosProjectionInput) => ({
