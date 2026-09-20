@@ -5,12 +5,34 @@ import {
 } from "./ros-derived-evaluation.js";
 import {
   rosDerivedEvaluationFixture as fixture,
+  rosDerivedProductionEvaluationFixture,
   hash,
   key,
   pin,
 } from "./ros-derived-evaluation.test-fixtures.js";
 
 describe("derived observed-truth report lineage", () => {
+  it("supports stable production package-role identities only with complete matching package provenance", () => {
+    const f = rosDerivedProductionEvaluationFixture();
+    const input = f.repin();
+    const result = validateRosDerivedEvaluation(input);
+    expect(result.lineage.productionPackageIdentity).toBe(input.input.productionPackageChecksum);
+    expect(result.lineage.productionIdentityVersion).toBe("ros-derived-production-role-v1");
+    const withoutChecksum = Object.fromEntries(
+      Object.entries(input.input).filter(([name]) => name !== "productionPackageChecksum"),
+    ) as typeof input.input;
+    expect(() => validateRosDerivedEvaluation({ ...input, input: withoutChecksum })).toThrow(
+      /pin is incomplete/,
+    );
+    const diagnosticOnly = Object.fromEntries(
+      Object.entries(input.input).filter(([name]) => !name.startsWith("productionPackage")),
+    ) as typeof input.input;
+    expect(() => validateRosDerivedEvaluation({ ...input, input: diagnosticOnly })).toThrow(
+      /derived report identity/,
+    );
+    Object.assign(f.productionPackage, { nonDstFragmentIdentity: hash("other-fragment") });
+    expect(() => validateRosDerivedEvaluation(f.repin())).toThrow(/physical dependency/);
+  });
   it("authenticates a complete ordered audit against distinct physical sources without changing the frozen original", () => {
     const f = fixture();
     const input = f.repin();

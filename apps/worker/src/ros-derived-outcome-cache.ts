@@ -387,11 +387,84 @@ async function exactRead(
   }
   return buffer;
 }
-async function authenticatedRead(
+/** Read-only inventory creation for explicit package preparation, never replay/admission proof. */
+export async function inspectRosDerivedOutcomeSource(input: {
+  readonly directory: string;
+  readonly namespace: RosDerivedOutcomeSource["namespace"];
+  readonly key: RosOutcomeCacheKey;
+  readonly signal?: AbortSignal;
+}): Promise<RosDerivedOutcomeSource> {
+  const { directory, signal, namespace } = input;
+  assert(path.isAbsolute(directory) && path.resolve(directory) === directory);
+  assert(NAMESPACES.includes(namespace));
+  const key = freeze(snapshot(input.key));
+  const filename = cacheFilename(key);
+  signal?.throwIfAborted();
+  const root = await rootIdentity(directory);
+  const handle = await open(
+    path.join(directory, filename),
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const initial = await handle.stat({ bigint: true });
+    assert(initial.isFile() && initial.size > 12n && initial.size <= BigInt(MAX_FILE));
+    const prefix = await exactRead(handle, 12, 0, signal);
+    assert.equal(prefix.subarray(0, 8).toString(), "LOROSC01");
+    const count = prefix.readUInt32LE(8);
+    assert(count > 0 && count <= MAX_MANIFEST);
+    const envelope = object(
+      JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          await exactRead(handle, count, 12, signal),
+        ),
+      ),
+    );
+    const digest = createHash("sha256"),
+      chunk = Buffer.alloc(1_024 * 1_024);
+    const bytes = Number(initial.size);
+    let offset = 0;
+    while (offset < bytes) {
+      signal?.throwIfAborted();
+      const read = await handle.read(chunk, 0, Math.min(chunk.length, bytes - offset), offset);
+      assert(read.bytesRead > 0, "Truncated inventory source");
+      digest.update(chunk.subarray(0, read.bytesRead));
+      offset += read.bytesRead;
+    }
+    const source: RosDerivedOutcomeSource = {
+      namespace,
+      key,
+      filename,
+      sha256: digest.digest("hex"),
+      bytes,
+      manifest: object(envelope.manifest),
+      manifestChecksum: String(envelope.checksum),
+    };
+    validateSource(source);
+    assert.equal(stamp(await handle.stat({ bigint: true })), stamp(initial));
+    assert.equal(
+      stamp(await lstat(path.join(directory, filename), { bigint: true })),
+      stamp(initial),
+    );
+    assert.equal(await rootIdentity(directory), root);
+    signal?.throwIfAborted();
+    return freeze(source);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Physical authentication only; callers must separately authenticate the pinned source manifest. */
+export async function readAuthenticatedRosOutcomeSource(
   directory: string,
   source: RosDerivedOutcomeSource,
   signal?: AbortSignal,
 ) {
+  assert(
+    path.isAbsolute(directory) && path.resolve(directory) === directory,
+    "Source root must be an explicit normalized absolute directory",
+  );
+  source = freeze(snapshot(source));
+  validateSource(source);
   signal?.throwIfAborted();
   const root = await rootIdentity(directory);
   const filename = path.join(directory, source.filename);
@@ -556,7 +629,7 @@ export function createRosDerivedOutcomeCache(options: {
         "Reference scenario count mismatch",
       );
       const { record, directory, id, manifestChecksum, recordSha256 } = entryFor(key);
-      const read = await authenticatedRead(directory, record.source, signal);
+      const read = await readAuthenticatedRosOutcomeSource(directory, record.source, signal);
       const expected = {
         ...record.originalForecast,
         strategy: record.strategy,

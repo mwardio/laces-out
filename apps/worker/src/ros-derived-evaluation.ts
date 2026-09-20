@@ -16,6 +16,11 @@ import {
   historicalRosConvergenceChecksum,
 } from "./first-party-ros-backtest.js";
 import { ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION } from "./ros-historical-corpus.js";
+import {
+  parseRosDerivedProductionPackage,
+  rosDerivedProductionRoleIdentity,
+  ROS_DERIVED_PRODUCTION_IDENTITY_VERSION,
+} from "./ros-derived-production-package.js";
 
 export const ROS_DERIVED_EVALUATION_VERSION =
   "corrected-observed-truth-fixed-forecast-comparison-v1";
@@ -69,6 +74,8 @@ export interface RosDerivedEvaluationInput {
   readonly originalCandidateReportChecksum: string;
   readonly originalPreviousReportJson: string;
   readonly originalPreviousReportChecksum: string;
+  readonly productionPackageJson?: string;
+  readonly productionPackageChecksum?: string;
 }
 
 export interface RosDerivedEvaluationLineage {
@@ -90,6 +97,10 @@ export interface RosDerivedEvaluationLineage {
   readonly correctedDstForecastSources: readonly Readonly<Record<string, unknown>>[];
   readonly candidateRowsChecksum: string;
   readonly previousRowsChecksum: string;
+  readonly productionIdentityVersion?: typeof ROS_DERIVED_PRODUCTION_IDENTITY_VERSION;
+  readonly productionPackageIdentity?: string;
+  readonly productionPackageChecksum?: string;
+  readonly productionQualificationProtocolChecksum?: string;
 }
 
 function fail(message: string): never {
@@ -440,6 +451,18 @@ export function validateRosDerivedEvaluation(options: {
   readonly lineage: RosDerivedEvaluationLineage;
 } {
   const input = options.input;
+  if (
+    (input.productionPackageJson === undefined) !==
+    (input.productionPackageChecksum === undefined)
+  )
+    fail("production package byte pin is incomplete");
+  const productionPackage =
+    input.productionPackageJson === undefined
+      ? null
+      : parseRosDerivedProductionPackage(
+          input.productionPackageJson,
+          input.productionPackageChecksum!,
+        );
   const envelope = pin(
     input.comparisonManifestJson,
     input.comparisonManifestChecksum,
@@ -579,15 +602,15 @@ export function validateRosDerivedEvaluation(options: {
       },
       "derived report role or manifest link mismatch",
     );
-    if (
-      report.outcomeCorpusIdentity !==
-      historicalRosChecksum({
-        kind: "derived-corrected-observation-evaluation",
-        role,
-        manifestIdentity: identity,
-      })
-    )
-      fail("derived report identity mismatch");
+    const expectedIdentity =
+      productionPackage === null
+        ? historicalRosChecksum({
+            kind: "derived-corrected-observation-evaluation",
+            role,
+            manifestIdentity: identity,
+          })
+        : rosDerivedProductionRoleIdentity(input.productionPackageChecksum!, role);
+    if (report.outcomeCorpusIdentity !== expectedIdentity) fail("derived report identity mismatch");
   }
   const originalCandidateRows = rows(originalCandidate, false, "v13");
   const originalPreviousRows = rows(originalPrevious, false, "v12");
@@ -600,6 +623,32 @@ export function validateRosDerivedEvaluation(options: {
     originalPreviousRows.map(rowId),
     "original ordered candidate/previous populations differ",
   );
+  if (productionPackage !== null) {
+    for (const field of [
+      "pointsAllowedDefinition",
+      "originalCandidatePhysicalCorpus",
+      "originalPreviousPhysicalCorpus",
+      "correctedDstPhysicalCorpus",
+      "nonDstFragmentIdentity",
+    ] as const)
+      if (productionPackage[field] !== manifest[field])
+        fail("production package physical dependency mismatch");
+    same(
+      productionPackage.originalForecastSources,
+      originalCandidateSources,
+      "production package original source mismatch",
+    );
+    same(
+      productionPackage.observedSources,
+      observedSources,
+      "production package observed source mismatch",
+    );
+    if (
+      productionPackage.originalAuditMembershipChecksum !==
+      historicalRosChecksum(originalCandidateRows.map(rowId))
+    )
+      fail("production package original audit membership mismatch");
+  }
   same(
     candidateRows.map(rowId),
     originalCandidateRows.map(rowId),
@@ -665,6 +714,14 @@ export function validateRosDerivedEvaluation(options: {
       correctedDstForecastSources: observedSources,
       candidateRowsChecksum: sha(manifest.candidateRowsChecksum),
       previousRowsChecksum: sha(manifest.previousRowsChecksum),
+      ...(productionPackage === null
+        ? {}
+        : {
+            productionIdentityVersion: ROS_DERIVED_PRODUCTION_IDENTITY_VERSION,
+            productionPackageIdentity: input.productionPackageChecksum!,
+        productionPackageChecksum: input.productionPackageChecksum!,
+        productionQualificationProtocolChecksum: productionPackage.files[productionPackage.dependencies.qualificationProtocol]!.sha256,
+          }),
     },
   });
 }

@@ -16,6 +16,12 @@ import { ROS_HISTORICAL_ACTUAL_DEFINITION_VERSION } from "./ros-historical-corpu
 import { ROS_DERIVED_EVALUATION_VERSION } from "./ros-derived-evaluation.js";
 import { fullForecasts } from "./ros-marginal-admission.test-fixtures.js";
 import { forecasts } from "./ros-marginal-development.test-fixtures.js";
+import {
+  ROS_DERIVED_PRODUCTION_DEPENDENCIES,
+  ROS_DERIVED_PRODUCTION_PACKAGE_VERSION,
+  rosDerivedProductionRoleIdentity,
+  type RosDerivedProductionPackage,
+} from "./ros-derived-production-package.js";
 
 export const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const positions = ["QB", "RB", "WR", "TE", "K", "DST"];
@@ -274,4 +280,70 @@ export function rosDerivedEvaluationFixture() {
     };
   }
   return { originalCandidate, originalPrevious, candidate, previous, training, manifest, repin };
+}
+
+/** Metadata/report boundary fixture only: fake file pins do not authenticate real physical data. */
+export function rosDerivedProductionEvaluationFixture() {
+  const fixture = rosDerivedEvaluationFixture();
+  const productionPackage: RosDerivedProductionPackage = {
+    version: ROS_DERIVED_PRODUCTION_PACKAGE_VERSION,
+    forecastSeason: 2026,
+    pointsAllowedDefinition: "yahoo-2022-v1",
+    originalCandidatePhysicalCorpus: String(fixture.originalCandidate.outcomeCorpusIdentity),
+    originalPreviousPhysicalCorpus: String(fixture.originalPrevious.outcomeCorpusIdentity),
+    correctedDstPhysicalCorpus: String(fixture.training.outcomeCorpusIdentity),
+    nonDstFragmentIdentity: String(fixture.manifest.nonDstFragmentIdentity),
+    originalAuditMembershipChecksum: historicalRosChecksum(
+      fixture.originalCandidate.diagnostics.candidateForecasts.map(key),
+    ),
+    originalForecastSources: fixture.originalCandidate.sources,
+    observedSources: fixture.training.sources,
+    candidateFrozenRevision: "a".repeat(40),
+    dependencies: Object.fromEntries(
+      ROS_DERIVED_PRODUCTION_DEPENDENCIES.map((role) => [role, `proof/${role}`]),
+    ) as unknown as RosDerivedProductionPackage["dependencies"],
+    files: Object.fromEntries(
+      ROS_DERIVED_PRODUCTION_DEPENDENCIES.map((role) => [
+        `proof/${role}`,
+        {
+          filename: `${hash(role)}.${role === "qualificationProtocol" ? "txt" : "json"}`,
+          sha256: hash(role),
+          encoding: role === "qualificationProtocol" ? "utf8-text" : "json",
+        },
+      ]),
+    ),
+    retention: "protect-original-vectors-and-proof-files-for-package-lifetime",
+    noSimulation: true,
+    canAuthorizeRelease: false,
+  };
+  return {
+    ...fixture,
+    productionPackage,
+    repin() {
+      const input = fixture.repin();
+      const packagePin = pin(productionPackage);
+      fixture.candidate.outcomeCorpusIdentity = rosDerivedProductionRoleIdentity(
+        packagePin.checksum,
+        "candidate",
+      );
+      fixture.previous.outcomeCorpusIdentity = rosDerivedProductionRoleIdentity(
+        packagePin.checksum,
+        "retained-v12",
+      );
+      const candidate = pin(fixture.candidate),
+        previous = pin(fixture.previous);
+      return {
+        ...input,
+        input: {
+          ...input.input,
+          productionPackageJson: packagePin.text,
+          productionPackageChecksum: packagePin.checksum,
+        },
+        candidateReportJson: candidate.text,
+        candidateReportChecksum: candidate.checksum,
+        previousReportJson: previous.text,
+        previousReportChecksum: previous.checksum,
+      };
+    },
+  };
 }

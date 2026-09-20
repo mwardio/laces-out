@@ -13,6 +13,7 @@ export default defineConfig({
     "first-party-ros-artifact-worker": "src/first-party-ros-artifact-worker.ts",
     "first-party-projection-process-entry": "src/first-party-projection-process-entry.ts",
     "adopt-ros-shared-corpus": "scripts/adopt-ros-shared-corpus.ts",
+    "prepare-ros-derived-package": "scripts/prepare-ros-derived-package.ts",
     "ros-bootstrap-health": "scripts/ros-bootstrap-health.ts",
   },
   format: ["esm"],

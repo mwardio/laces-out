@@ -15,6 +15,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  inspectRosDerivedOutcomeSource,
   createRosDerivedOutcomeCache,
   createRosDerivedOutcomeRecord,
   type RosDerivedOutcomeDependencies,
@@ -523,4 +524,26 @@ describe("authenticated derived ROS vector references", () => {
       }),
     ).toThrow(/population/);
   });
+});
+
+it("inventories the exact retained bytes read-only for package staging without granting compatibility", async () => {
+  const f = await fixture();
+  expect(
+    await inspectRosDerivedOutcomeSource({
+      directory: f.directory,
+      namespace: f.source.namespace,
+      key: f.source.key,
+    }),
+  ).toEqual(f.source);
+  expect(await readFile(f.file)).toEqual(f.bytes);
+  const cancelled = new AbortController();
+  cancelled.abort(new Error("cancelled inventory"));
+  await expect(
+    inspectRosDerivedOutcomeSource({
+      directory: f.directory,
+      namespace: f.source.namespace,
+      key: f.source.key,
+      signal: cancelled.signal,
+    }),
+  ).rejects.toThrow("cancelled inventory");
 });
