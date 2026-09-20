@@ -662,6 +662,25 @@ export function parsePinnedRosMarginalDevelopmentInputs(input: PinnedRosMarginal
   };
 }
 
+/** Keep physical failures from the declared training source; preserve unknown failure reasons. */
+export function scopedRosTrainingConvergenceBlockers(
+  blockers: readonly string[],
+  positions: readonly FirstPartyRosPosition[],
+): readonly string[] {
+  return blockers.filter((reason) => {
+    if (!reason.includes("convergence")) return false;
+    // Native DST-only reports retain the global policy's missing-position diagnostics. Those
+    // placeholders do not describe the independently authenticated non-DST audit contribution.
+    // Exclude only this exact known diagnostic outside the declared source scope; unknown or
+    // mixed failures still block, as do every scoped and row-level physical failure.
+    const missing =
+      /^calibration_(QB|RB|WR|TE|K|DST)_(one-to-four|five-to-eight|nine-plus)_convergence_below_minimum$/u.exec(
+        reason,
+      );
+    return !missing || positions.includes(missing[1] as FirstPartyRosPosition);
+  });
+}
+
 /** Development evidence deliberately has no root publicationPolicy/champion/report admission shape. */
 export function buildRosMarginalDevelopmentReport(input: PinnedRosMarginalDevelopmentInput) {
   const {
@@ -870,9 +889,9 @@ export function buildRosMarginalDevelopmentReport(input: PinnedRosMarginalDevelo
     // including failures absent from the original audit's independently sampled convergence check.
     reasons.push(...training.physicalBlockers.map((reason) => `interval-training:${reason}`));
     reasons.push(
-      ...training.blockers
-        .filter((reason) => reason.includes("convergence"))
-        .map((reason) => `interval-training:preserved-legacy:${reason}`),
+      ...scopedRosTrainingConvergenceBlockers(training.blockers, training.positions).map(
+        (reason) => `interval-training:preserved-legacy:${reason}`,
+      ),
     );
   }
   const payload = {

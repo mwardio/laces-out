@@ -769,6 +769,8 @@ describe("pinned marginal ROS report development wrapper", () => {
     const trainingBlocker = "calibration_DST_nine-plus_convergence_below_minimum";
     changed.report.blockers = [
       trainingBlocker,
+      "calibration_QB_one-to-four_convergence_below_minimum",
+      "calibration_K_nine-plus_convergence_below_minimum",
       "calibration_DST_nine-plus_interval_coverage_gate_failed",
     ];
     changed.report.state = "insufficient";
