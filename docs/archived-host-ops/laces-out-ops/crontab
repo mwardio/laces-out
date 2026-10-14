@@ -1,0 +1,5 @@
+*/5 * * * * /ops/sentinel.sh >>/proc/1/fd/1 2>>/proc/1/fd/2
+45 2 * * * /ops/backup.sh >>/proc/1/fd/1 2>>/proc/1/fd/2
+15 7 * * 3 /ops/projection-scorecard.sh >>/proc/1/fd/1 2>>/proc/1/fd/2
+30 4 1 * * /ops/model-validation.sh >>/proc/1/fd/1 2>>/proc/1/fd/2
+30 3 2 * * /ops/restore-verify.sh >>/proc/1/fd/1 2>>/proc/1/fd/2
