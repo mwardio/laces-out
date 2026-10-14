@@ -29,6 +29,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -51,11 +52,13 @@ import {
 } from "@laces-out/db";
 import type { Database } from "@laces-out/db";
 import {
+  FIRST_PARTY_PROJECTION_MODEL_VERSION,
+  LEAGUE_SCORING_NORMALIZATION_VERSION,
   applyFirstPartyProjectionChampionPolicy,
   runFirstPartyProjectionBacktest,
   runFirstPartyTeamDefenseBacktest,
 } from "@laces-out/projections";
-import { and, count, eq, sql } from "drizzle-orm";
+import { and, count, eq, inArray, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { drizzle } from "drizzle-orm/postgres-js";
 import * as schema from "../../../packages/db/src/schema.js";
@@ -66,8 +69,10 @@ import { databaseFirstPartyRosCandidateProvider } from "./first-party-ros-candid
 import { FirstPartyProjectionProcess } from "./first-party-projection-process.js";
 
 import {
+  FIRST_PARTY_PUBLICATION_POLICY_VERSION,
   FIRST_PARTY_PROJECTION_SOURCE_KEY,
   FirstPartyProjectionService,
+  latestFirstPartyWeeklyProjectionSets,
   requiredFirstPartyProjectionSourceKeys,
 } from "./first-party-projections.js";
 
@@ -533,6 +538,93 @@ describe.skipIf(!dockerAvailable)(
       }
     }, 30_000);
 
+    it("monitors exact weekly publications independently of the reference gate and historical source age", async () => {
+      const healthSql = readFileSync(
+        fileURLToPath(new URL("../../../scripts/weekly-publication-health.sql", import.meta.url)),
+        "utf8",
+      );
+      for (const version of [
+        FIRST_PARTY_PROJECTION_MODEL_VERSION,
+        FIRST_PARTY_PUBLICATION_POLICY_VERSION,
+        LEAGUE_SCORING_NORMALIZATION_VERSION,
+      ])
+        expect(healthSql).toContain(version);
+      const client = postgres(container.url, { max: 1 });
+      try {
+        await client.begin(async (sql) => {
+          await sql.unsafe(`
+            create temp table leagues (id text,name text,archived boolean) on commit drop;
+            create temp table league_seasons (id text,league_id text,season int,current_week int) on commit drop;
+            create temp table projection_sets (id text,league_season_id text,season int,week int,source text,horizon text,metadata jsonb,created_at timestamptz,fetched_at timestamptz) on commit drop;
+            create temp table player_projections (projection_set_id text) on commit drop;
+            create temp table projection_model_runs (source_sync_run_id text,season int,target_week int,horizon text,model_version text,input_checksum text,metrics jsonb,created_at timestamptz,quality_state text,players_published int) on commit drop;
+            insert into leagues select id,id,id='archived' from unnest(array['healthy','stale','missing','empty','partial','obsolete','old-policy','old-mapping','old-input','withheld','unsupported','wrong-week','wrong-season','archived']) id;
+            insert into league_seasons select id,id,extract(year from now() at time zone 'UTC')::int-case when extract(month from now() at time zone 'UTC')<3 then 1 else 0 end,2 from leagues;
+            insert into projection_model_runs select 'run',season,2,'week','${FIRST_PARTY_PROJECTION_MODEL_VERSION}','current-input','{"leagues":{"published":1,"withheld":[]}}',now(),'rejected',0 from league_seasons limit 1;
+            insert into projection_sets select id,id,season,2,'laces-out-first-party','week',jsonb_build_object(
+              'modelVersion','${FIRST_PARTY_PROJECTION_MODEL_VERSION}',
+              'publicationPolicyVersion','${FIRST_PARTY_PUBLICATION_POLICY_VERSION}',
+              'scoringMappingVersion','${LEAGUE_SCORING_NORMALIZATION_VERSION}',
+              'scoringProfileKey','profile','modelInputChecksum','current-input','qualityState','publishable',
+              'supportedPositions','["QB","RB","WR","TE","K","DST"]'::jsonb,
+              'publishedPositions','["QB","RB","WR","TE","K","DST"]'::jsonb,
+              'withheldPositions','[]'::jsonb),
+              now()-case when id='stale' then interval '20 hours' else interval '1 hour' end,
+              now()-interval '1 year' from league_seasons where id <> 'missing';
+            insert into player_projections select id from projection_sets where id <> 'empty';
+            update projection_sets set metadata=metadata || '{"modelVersion":"old-model"}' where id='obsolete';
+            update projection_sets set metadata=metadata || '{"publicationPolicyVersion":"old-policy"}' where id='old-policy';
+            update projection_sets set metadata=metadata || '{"scoringMappingVersion":"old-mapping"}' where id='old-mapping';
+            update projection_sets set metadata=metadata || '{"modelInputChecksum":"old-input"}' where id='old-input';
+            insert into projection_sets select id||'-partial',league_season_id,season,week,source,horizon,
+              metadata || '{"publishedPositions":["K","DST"]}',now(),fetched_at from projection_sets where id='partial';
+            insert into player_projections values ('partial-partial');
+            update projection_sets set week=3 where id='wrong-week';
+            update projection_sets set season=season-1 where id='wrong-season';
+            update projection_model_runs set metrics=jsonb_build_object('leagues',jsonb_build_object('withheld',jsonb_build_array(
+              jsonb_build_object('leagueSeasonId','withheld','scope','league','reasons',jsonb_build_array('backtest failed')),
+              jsonb_build_object('leagueSeasonId','unsupported','scope','league','positions',
+                (select jsonb_agg(jsonb_build_object('position',position,'source','normalization')) from unnest(array['QB','RB','WR','TE','K','DST']) position))
+            )));
+          `);
+          const rows =
+            await sql.unsafe<{ id: string; age_hours: string; publication_state: string }[]>(
+              healthSql,
+            );
+          expect(rows).toHaveLength(13);
+          expect(rows.find((row) => row.id === "healthy")).toMatchObject({
+            age_hours: "1",
+            publication_state: "published",
+          });
+          expect(rows.find((row) => row.id === "stale")).toMatchObject({
+            age_hours: "20",
+            publication_state: "published",
+          });
+          expect(rows.find((row) => row.id === "withheld")?.publication_state).toBe("withheld");
+          expect(rows.find((row) => row.id === "unsupported")?.publication_state).toBe(
+            "unsupported",
+          );
+          for (const id of ["missing", "wrong-week", "wrong-season"])
+            expect(rows.find((row) => row.id === id)?.publication_state, id).toBe("missing");
+          for (const id of [
+            "empty",
+            "partial",
+            "obsolete",
+            "old-policy",
+            "old-mapping",
+            "old-input",
+          ])
+            expect(rows.find((row) => row.id === id)?.publication_state, id).toBe("incomplete");
+          // Failed checks are not hidden by an old complete publication or a healthy peer.
+          await sql`update projection_model_runs set metrics='{"leagues":{"withheld":[{"leagueSeasonId":"healthy","scope":"positions","positions":[{"position":"WR","source":"backtest-gate"}]}]}}'`;
+          const rejected = await sql.unsafe<{ id: string; publication_state: string }[]>(healthSql);
+          expect(rejected.find((row) => row.id === "healthy")?.publication_state).toBe("withheld");
+        });
+      } finally {
+        await client.end();
+      }
+    });
+
     it("applies migration 0016 cleanly on top of 0001-0015 and creates the ROS invariants it introduces", async () => {
       const columnRows = await mainHandle.db.execute<{ column_name: string }>(sql`
           select column_name
@@ -826,6 +918,72 @@ describe.skipIf(!dockerAvailable)(
       expect(run?.playersPublished).toBe(0);
     }, 20_000);
 
+    it("loads only the latest weekly metadata per league, independent of accumulated history and source age", async () => {
+      const first = await preparedScoredWeek(mainHandle.db);
+      const second = await preparedScoredWeek(mainHandle.db);
+      const leagueSeasonIds = [first.leagueSeason.id, second.leagueSeason.id];
+      const createdAt = first.input.now;
+      const winnerIds = [randomUUID(), randomUUID()].sort();
+      const seed = (
+        leagueSeasonId: string,
+        overrides: Partial<typeof projectionSets.$inferInsert> = {},
+      ): typeof projectionSets.$inferInsert => ({
+        leagueSeasonId,
+        visibility: "league",
+        source: "laces-out-first-party",
+        version: randomUUID(),
+        season: first.input.season,
+        week: first.input.week,
+        horizon: "week",
+        fetchedAt: createdAt,
+        createdAt,
+        inputChecksum: checksumFor(randomUUID()),
+        ...overrides,
+      });
+      await mainHandle.db.insert(projectionSets).values([
+        ...Array.from({ length: 120 }, (_, index) =>
+          seed(first.leagueSeason.id, {
+            createdAt: new Date(createdAt.getTime() - index - 1),
+            fetchedAt: new Date(createdAt.getTime() + 60_000),
+            metadata: { obsolete: "x".repeat(10_000) },
+          }),
+        ),
+        seed(first.leagueSeason.id, { id: winnerIds[0], metadata: { tied: true } }),
+        seed(first.leagueSeason.id, {
+          id: winnerIds[1],
+          fetchedAt: new Date(createdAt.getTime() - 86_400_000),
+          metadata: { frozenPointPolicyVersions: { [first.player.id]: "original-policy" } },
+        }),
+        seed(second.leagueSeason.id, { metadata: { second: true } }),
+        seed(first.leagueSeason.id, { week: first.input.week + 1 }),
+        seed(first.leagueSeason.id, { season: first.input.season + 1 }),
+        seed(first.leagueSeason.id, { source: "user-import" }),
+      ]);
+      const latest = await latestFirstPartyWeeklyProjectionSets(mainHandle.db, {
+        leagueSeasonIds,
+        season: first.input.season,
+        week: first.input.week,
+      });
+      expect(latest).toHaveLength(2);
+      expect(latest.find((set) => set.leagueSeasonId === first.leagueSeason.id)).toEqual({
+        id: winnerIds[1],
+        leagueSeasonId: first.leagueSeason.id,
+        metadata: { frozenPointPolicyVersions: { [first.player.id]: "original-policy" } },
+      });
+      expect(latest.find((set) => set.leagueSeasonId === second.leagueSeason.id)?.metadata).toEqual(
+        {
+          second: true,
+        },
+      );
+      expect(
+        await latestFirstPartyWeeklyProjectionSets(mainHandle.db, {
+          leagueSeasonIds: [],
+          season: first.input.season,
+          week: first.input.week,
+        }),
+      ).toEqual([]);
+    }, 20_000);
+
     it("atomically publishes an exact league's passing position despite a rejected reference profile", async () => {
       const fixture = await preparedScoredWeek(mainHandle.db);
       const service = new FirstPartyProjectionService({
@@ -869,6 +1027,103 @@ describe.skipIf(!dockerAvailable)(
         .where(eq(projectionSets.leagueSeasonId, fixture.leagueSeason.id));
       expect(repeatSets).toHaveLength(1);
     }, 20_000);
+
+    it("keeps league rows aligned across bulk batches and rolls back every league after a later batch fails", async () => {
+      const first = await preparedScoredWeek(mainHandle.db);
+      const second = await preparedScoredWeek(mainHandle.db);
+      const extraPlayers = await mainHandle.db
+        .insert(players)
+        .values(
+          Array.from({ length: 600 }, () => ({
+            gsisId: `pg-${randomUUID()}`,
+            fullName: "Bulk Receiver",
+            nflTeam: "BUF",
+            primaryPosition: "WR",
+            eligiblePositions: ["WR"],
+            lastSeason: first.input.season,
+          })),
+        )
+        .returning();
+      const input = {
+        ...first.input,
+        players: [first.player, ...extraPlayers],
+        leagues: [first.leagueSeason, second.leagueSeason],
+        rules: [...first.input.rules, ...second.input.rules],
+      };
+      const service = new FirstPartyProjectionService({
+        database: mainHandle.db,
+        now: () => input.now,
+      });
+      await service.publishPreparedWeek(input);
+      const leagueIds = input.leagues.map((league) => league.id);
+      const readSets = () =>
+        mainHandle.db
+          .select()
+          .from(projectionSets)
+          .where(inArray(projectionSets.leagueSeasonId, leagueIds));
+      const originalSets = await readSets();
+      expect(originalSets).toHaveLength(2);
+      const readRows = (setId: string) =>
+        mainHandle.db
+          .select({
+            playerId: playerProjections.playerId,
+            meanPoints: playerProjections.meanPoints,
+            floorPoints: playerProjections.floorPoints,
+            ceilingPoints: playerProjections.ceilingPoints,
+            confidence: playerProjections.confidence,
+            components: playerProjections.components,
+          })
+          .from(playerProjections)
+          .where(eq(playerProjections.projectionSetId, setId))
+          .orderBy(playerProjections.playerId);
+      const originalRows = await readRows(originalSets[0]!.id);
+      expect(originalRows).toHaveLength(601);
+      expect(await readRows(originalSets[1]!.id)).toEqual(originalRows);
+      expect(new Set(originalRows.map((row) => row.playerId))).toEqual(
+        new Set(input.players.map((player) => player.id)),
+      );
+      const failedChecksum = checksumFor(randomUUID());
+      await mainHandle.db.execute(
+        sql.raw(`
+        create function fail_second_league_batch() returns trigger language plpgsql as $$
+        begin
+          if exists (select 1 from projection_sets where id = NEW.projection_set_id
+            and league_season_id = '${second.leagueSeason.id}'::uuid) then
+            raise exception 'deliberate later league batch failure';
+          end if;
+          return NEW;
+        end $$;
+        create trigger fail_second_league_batch before insert on player_projections
+          for each row execute function fail_second_league_batch();
+      `),
+      );
+      try {
+        await expect(
+          service.publishPreparedWeek({ ...input, inputChecksum: failedChecksum }),
+        ).rejects.toThrow();
+      } finally {
+        await mainHandle.db.execute(
+          sql.raw(`
+          drop trigger fail_second_league_batch on player_projections;
+          drop function fail_second_league_batch();
+        `),
+        );
+      }
+      expect(await readSets()).toEqual(originalSets);
+      for (const set of originalSets) expect(await readRows(set.id)).toEqual(originalRows);
+      expect(
+        await mainHandle.db
+          .select()
+          .from(projectionModelRuns)
+          .where(eq(projectionModelRuns.inputChecksum, failedChecksum)),
+      ).toEqual([]);
+      expect(
+        await mainHandle.db
+          .select()
+          .from(syncRuns)
+          .where(eq(syncRuns.artifactChecksum, failedChecksum)),
+      ).toEqual([]);
+    }, 30_000);
 
     it("isolates a cold prepared publication without changing scored rows and keeps exact replay idempotent", async () => {
       // Distinct fixture source/league/player/checksum identities ensure the child cannot take

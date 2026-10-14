@@ -2,20 +2,23 @@
 -- scoring shape is registered; first publication gets 36 hours from the validation request.
 -- Complete weekly normalization also catches a failed registrar, with 36 hours from signup.
 -- Keep release identities synchronized with @laces-out/projections (pinned by the PG test).
--- Deployment may SET laces.ros_release_rail = 'marginal-v8'; the default remains legacy-v7.
+-- Deployment must select the serving API's rail with SET laces.ros_release_rail.
+-- Unconfigured legacy deployments retain the legacy-v7 default.
 -- An unknown rail emits an actionable configuration failure and selects no model evidence.
 with release_selection as (
   select coalesce(nullif(current_setting('laces.ros_release_rail', true), ''), 'legacy-v7') as rail
 ), release_identity as (
   select 'laces-ros-distribution-v13'::text as model_version,
          case rail when 'marginal-v8' then 'season-walk-forward-mean-rmse-marginal-quantiles-v8'
+           when 'point-v1' then 'season-walk-forward-mean-only-v1'
            else 'season-walk-forward-mean-rmse-block-wis-cqr-v7' end::text as policy_version,
          case rail when 'marginal-v8' then 'season-prior-weighted-quantile-residuals-v1'
+           when 'point-v1' then 'unavailable-point-only-v1'
            else 'season-blocked-split-conformal-cqr-v1' end::text as calibration_version,
-         'league-scoring-map-v8'::text as scoring_mapping_version,
+         'league-scoring-map-v9'::text as scoring_mapping_version,
          extract(year from now() at time zone 'UTC')::int
            - case when extract(month from now() at time zone 'UTC') < 3 then 1 else 0 end as season
-    from release_selection where rail in ('legacy-v7', 'marginal-v8')
+    from release_selection where rail in ('legacy-v7', 'marginal-v8', 'point-v1')
 ), latest_weekly as (
   select distinct on (s.league_season_id)
          s.league_season_id, s.metadata
@@ -112,5 +115,5 @@ union all
 select 'configuration-error'::text,
        'ROS release rail configuration is invalid'::text,
        -1::bigint,
-       'unavailable; select legacy-v7 or marginal-v8'::text
-  from release_selection where rail not in ('legacy-v7', 'marginal-v8');
+       'unavailable; select legacy-v7, marginal-v8 or point-v1'::text
+  from release_selection where rail not in ('legacy-v7', 'marginal-v8', 'point-v1');

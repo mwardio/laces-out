@@ -17,6 +17,7 @@ export default defineConfig({
     "replay-ros-derived-canary": "scripts/replay-ros-derived-canary.ts",
     "inventory-ros-derived-dst": "scripts/inventory-ros-derived-dst.ts",
     "ros-bootstrap-health": "scripts/ros-bootstrap-health.ts",
+    "prune-projection-history": "scripts/prune-projection-history.ts",
   },
   format: ["esm"],
   platform: "node",

@@ -118,6 +118,9 @@ export interface EmailSweepService {
 }
 
 export interface WorkerServices {
+  readonly pruneProjectionHistory?: (
+    signal: AbortSignal,
+  ) => Promise<{ readonly deletedSets: number }>;
   readonly leagueSync?: LeagueSyncService;
   readonly projectionRefresh?: ProjectionRefreshService;
   readonly providerSyncSweep?: ProviderSyncSweepService;
@@ -155,6 +158,14 @@ export async function registerWorkers(
   logger: Logger,
   services: WorkerServices = {},
 ): Promise<void> {
+  await boss.work(queueNames.projectionRetention, workOptions, async (jobs) => {
+    const prune = requireService(services.pruneProjectionHistory, "Projection retention");
+    for (const job of jobs) {
+      assertNotAborted(job);
+      const result = await prune(job.signal);
+      logger.info({ jobId: job.id, ...result }, "projection retention completed");
+    }
+  });
   await boss.work<LeagueSyncJob>(queueNames.syncLeague, workOptions, async (jobs) => {
     const service = requireService(services.leagueSync, "League sync");
     for (const job of jobs) {

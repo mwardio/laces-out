@@ -56,6 +56,7 @@ import { NflverseCatalogRefresher } from "./nflverse-catalog.js";
 import { projectionHistorySeasons } from "./first-party-projections.js";
 import { FirstPartyProjectionProcess } from "./first-party-projection-process.js";
 import { NflverseScheduleRefresher } from "./nflverse-schedules.js";
+import { pruneProjectionHistory } from "./projection-retention.js";
 import { NflverseWeeklyDataRefresher } from "./nflverse-weekly-data.js";
 import { ProjectionLockWindowService } from "./projection-lock-window.js";
 import { RosProfileDiscoveryService } from "./ros-profile-discovery.js";
@@ -410,6 +411,7 @@ async function start(): Promise<void> {
   await boss.start();
   await registerQueues(boss);
   await registerWorkers(boss, logger, {
+    pruneProjectionHistory: (signal) => pruneProjectionHistory(database.db, signal),
     dataHealth: dataHealthService,
     emailSweep: emailSweepService,
     leagueSync: leagueSyncService,

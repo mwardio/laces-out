@@ -402,6 +402,8 @@ describe("DrizzleRecommendationRunWriter", () => {
     };
     const recommendationMutation = { values: recommendationValues };
     const transaction = {
+      execute: vi.fn().mockResolvedValue([]),
+      select: vi.fn(() => ({ from: () => ({ where: () => ({ for: async () => [] }) }) })),
       insert: vi.fn().mockReturnValueOnce(runMutation).mockReturnValueOnce(recommendationMutation),
     };
     const database = {
@@ -461,6 +463,20 @@ describe("DrizzleRecommendationRunWriter", () => {
       runId: "run-1",
       inserted: true,
     });
+    transaction.insert.mockClear();
+    await expect(
+      new DrizzleRecommendationRunWriter(database).insertRun({
+        ...input,
+        provenance: {
+          ...input.provenance,
+          inputs: {
+            ...input.provenance.inputs,
+            projectionSetIds: ["00000000-0000-4000-8000-000000000001"],
+          },
+        },
+      }),
+    ).rejects.toThrow("Recommendation projection inputs expired");
+    expect(transaction.insert).not.toHaveBeenCalled();
     expect(recommendationValues).toHaveBeenCalledWith([
       {
         runId: "run-1",

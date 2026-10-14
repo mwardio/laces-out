@@ -1,0 +1,99 @@
+--- a/laces-out-ops/sentinel.sh
++++ b/laces-out-ops/sentinel.sh
+@@ -1,6 +1,13 @@
+ #!/usr/bin/env bash
+ set -Eeuo pipefail
+ source /ops/common.sh
++
++report_only=false
++case "${1:-}" in
++  "") ;;
++  --report-only) report_only=true ;;
++  *) printf "Usage: %s [--report-only]\n" "$0" >&2; exit 2 ;;
++esac
+ 
+ # Cron and manual probes must not race the persisted delivery state.
+ exec 9>"${STATE_ROOT}/sentinel.lock"
+@@ -71,63 +78,7 @@
+          );"
+   )
+ 
+-  weekly_projection_state="$(psql_query -At -F '|' -c "
+-    with source as (
+-      select consecutive_failures,
+-             coalesce(
+-               metadata->>'qualityState',
+-               case when coalesce(metadata->>'publishable', 'false') = 'true'
+-                 then 'publishable' else 'unknown' end
+-             ) as quality_state,
+-             nullif(last_error_detail, '') as last_error_detail
+-        from data_sources
+-       where enabled
+-         and key = 'laces-out.projections.first-party'
+-    ), latest as (
+-      select max(created_at) as published_at
+-        from projection_model_runs
+-       where horizon = 'week'
+-         and quality_state = 'publishable'
+-         and players_published > 0
+-    )
+-    select source.consecutive_failures,
+-           source.quality_state,
+-           coalesce(floor(extract(epoch from (now() - latest.published_at)) / 3600)::bigint, -1),
+-           coalesce(source.last_error_detail, '')
+-      from source cross join latest;")"
+-  if [[ -n "${weekly_projection_state}" ]]; then
+-    IFS='|' read -r projection_failures projection_quality projection_age_hours projection_detail <<<"${weekly_projection_state}"
+-    if [[ "${projection_failures}" -ge 3 ]]; then
+-      add_issue "weekly-projection-failures" "Weekly projections have ${projection_failures} consecutive failures${projection_detail:+ (${projection_detail})}"
+-    elif [[ "${projection_quality}" != "publishable" ]]; then
+-      add_issue "weekly-projection-gate" "Weekly projection publication is ${projection_quality}"
+-    elif [[ "${projection_age_hours}" -lt 0 || "${projection_age_hours}" -ge "${weekly_projection_max_age_hours}" ]]; then
+-      add_issue "weekly-projection-stale" "No publishable weekly forecast in ${projection_age_hours:-unknown}h"
+-    else
+-      observations+=("latest publishable weekly forecast ${projection_age_hours}h old")
+-    fi
+-  else
+-    add_issue "weekly-projection-missing" "Weekly projection source is missing"
+-  fi
+-
+-  # Read the publication timestamps, never the job/source heartbeat: shadow-only runs can succeed
+-  # for days while the approved fallback gets older. Keep this independent of weekly freshness.
+-  declare -a stale_ros_leagues=()
+-  ros_health_sql="${LACES_OUT_REPOSITORY:-/workspace/laces-out}/scripts/ros-publication-health.sql"
+-  if [[ ! "${ros_projection_max_age_hours}" =~ ^[1-9][0-9]*$ ]]; then
+-    add_issue "ros-monitor-config" "ROS publication age threshold is invalid"
+-  elif [[ ! -r "${ros_health_sql}" ]] || ! ros_publications="$(psql_query -At -F '|' -c "$(cat "${ros_health_sql}")")"; then
+-    add_issue "ros-monitor-query" "Cannot inspect approved ROS publication freshness"
+-  else
+-    while IFS='|' read -r ros_league_id ros_league_name ros_age_hours ros_published_at; do
+-      [[ -z "${ros_league_id}" ]] && continue
+-      if [[ "${ros_age_hours}" -lt 0 || "${ros_age_hours}" -ge "${ros_projection_max_age_hours}" ]]; then
+-        stale_ros_leagues+=("${ros_league_name}: ${ros_age_hours}h old, last published ${ros_published_at}")
+-      else
+-        observations+=("ROS ${ros_league_name}: ${ros_age_hours}h old")
+-      fi
+-    done <<<"${ros_publications}"
+-  fi
++  source "${LACES_OUT_REPOSITORY:-/workspace/laces-out}/scripts/projection-publication-issues.sh"
+ 
+   ros_job="$(psql_query -At -F '|' -c "
+     select state, retry_count,
+@@ -223,7 +174,7 @@
+      where horizon = 'week'
+      order by created_at desc
+      limit 1;")"
+-  observations+=("latest model run ${model_summary:-unavailable}")
++  observations+=("latest reference-profile model run ${model_summary:-unavailable}; league publication health is checked separately")
+ else
+   add_issue "database" "PostgreSQL is not accepting connections"
+ fi
+@@ -253,7 +204,7 @@
+   add_issue "backup-disk" "backup disk is ${disk_used}% full"
+ fi
+ 
+-source /ops/notify-state.sh
++if [[ "$report_only" == false ]]; then source /ops/notify-state.sh; fi
+ 
+ report="${REPORT_ROOT}/ops-latest.txt"
+ {

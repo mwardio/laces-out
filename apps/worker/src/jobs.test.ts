@@ -120,6 +120,7 @@ describe("worker queue reliability", () => {
         notificationSweep: { retryLimit: 2, retryDelayMax: 120, expireInSeconds: 300 },
         providerSyncSweep: { retryLimit: 3, retryDelayMax: 300, expireInSeconds: 240 },
         emailSweep: { retryLimit: 2, retryDelayMax: 600, expireInSeconds: 600 },
+        projectionRetention: { retryLimit: 2, retryDelayMax: 600, expireInSeconds: 900 },
       } as const;
       const limits = expectedLimits[key as keyof typeof expectedLimits];
       expect(createQueue).toHaveBeenCalledWith(
@@ -458,6 +459,36 @@ describe("typed worker service dispatch", () => {
 });
 
 describe("dispatch contracts and schedules", () => {
+  it("schedules bounded projection cleanup hourly even without a projection season", async () => {
+    const { boss, schedule, handlers } = bossHarness();
+    const { logger, info } = loggerHarness();
+    const prune = vi.fn().mockResolvedValue({ deletedSets: 25 });
+    await registerSchedules(boss);
+    expect(schedule).toHaveBeenCalledWith(
+      queueNames.projectionRetention,
+      "17 * * * *",
+      {},
+      expect.objectContaining({ singletonKey: "projection-retention", singletonSeconds: 3600 }),
+    );
+    await registerWorkers(boss, logger, { pruneProjectionHistory: prune });
+    const value = job(queueNames.projectionRetention, {});
+    await run(handlers, queueNames.projectionRetention, value);
+    expect(prune).toHaveBeenCalledWith(value.signal);
+    expect(info).toHaveBeenCalledWith(
+      { jobId: value.id, deletedSets: 25 },
+      "projection retention completed",
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      run(
+        handlers,
+        queueNames.projectionRetention,
+        job(queueNames.projectionRetention, {}, controller.signal),
+      ),
+    ).rejects.toThrow();
+    expect(prune).toHaveBeenCalledTimes(1);
+  });
   it("adds stable deduplication and global serialization metadata", async () => {
     const { boss, send } = bossHarness();
 
@@ -533,7 +564,7 @@ describe("dispatch contracts and schedules", () => {
       queueNames.refreshProjections,
       "hourly-first-party-projections",
     );
-    expect(schedule).toHaveBeenCalledTimes(10);
+    expect(schedule).toHaveBeenCalledTimes(11);
     expect(schedule).toHaveBeenNthCalledWith(
       1,
       queueNames.providerSyncSweep,

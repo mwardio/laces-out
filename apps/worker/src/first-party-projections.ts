@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   dataSources,
@@ -132,6 +132,38 @@ import {
 export const FIRST_PARTY_PROJECTION_SOURCE_KEY = "laces-out.projections.first-party";
 export const FIRST_PARTY_PROJECTION_SET_SOURCE = "laces-out-first-party";
 export const WEEKLY_PUBLICATION_CLOCK_VERSION = "weekly-publication-clock-v1";
+
+/** Select IDs before loading metadata: publication history can exceed the child process heap. */
+export async function latestFirstPartyWeeklyProjectionSets(
+  database: Pick<Database, "select">,
+  input: {
+    readonly leagueSeasonIds: readonly string[];
+    readonly season: number;
+    readonly week: number;
+  },
+) {
+  if (input.leagueSeasonIds.length === 0) return [];
+  return database
+    .select({
+      id: projectionSets.id,
+      leagueSeasonId: projectionSets.leagueSeasonId,
+      metadata: projectionSets.metadata,
+    })
+    .from(projectionSets).where(sql`${projectionSets.id} in (
+      select distinct on (${projectionSets.leagueSeasonId}) ${projectionSets.id}
+      from ${projectionSets}
+      where ${and(
+        inArray(projectionSets.leagueSeasonId, [...input.leagueSeasonIds]),
+        eq(projectionSets.source, FIRST_PARTY_PROJECTION_SET_SOURCE),
+        eq(projectionSets.season, input.season),
+        eq(projectionSets.week, input.week),
+        eq(projectionSets.horizon, "week"),
+      )}
+      -- fetched_at describes source verification, not publication chronology.
+      order by ${projectionSets.leagueSeasonId}, ${projectionSets.createdAt} desc,
+        ${projectionSets.id} desc
+    )`);
+}
 
 const projectionCheckIntervalMinutes = 60;
 const historySeasonCount = 4;
@@ -3449,6 +3481,26 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       )
       .at(-1);
 
+    // Encode scored rows before taking input locks. Expanding tens of thousands of rows into
+    // individual SQL parameters under those locks consumed the publication budget at live scale.
+    const preparedPublications = leaguePublications.map((publication) => ({
+      id: randomUUID(),
+      publication,
+    }));
+    const playerBatches = chunks(
+      preparedPublications.flatMap(({ id, publication }) =>
+        publication.rows.map((row) => ({
+          projection_set_id: id,
+          player_id: row.playerId,
+          mean_points: row.mean.toFixed(3),
+          floor_points: row.floor.toFixed(3),
+          ceiling_points: row.ceiling.toFixed(3),
+          confidence: row.confidence.toFixed(4),
+          components: row.components,
+        })),
+      ),
+    ).map((batch) => JSON.stringify(batch));
+
     clock.check(this.#now(), true);
     const inserted = await this.#database.transaction(async (transaction) => {
       const budget = input.inputSnapshot
@@ -3593,48 +3645,53 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
       // A default-profile K or D/ST failure cannot overrule another league's own passing
       // position evidence. The planner has already enforced its complete roster/locked-row
       // contract; never fill missing rows from a different set or scoring profile here.
-      for (const publication of leaguePublications) {
-        const [set] = await withinBudget(
+      if (preparedPublications.length > 0) {
+        const sets = await withinBudget(
           transaction
             .insert(projectionSets)
-            .values({
-              leagueSeasonId: publication.league.id,
-              createdByUserId: null,
-              visibility: "league",
-              source: FIRST_PARTY_PROJECTION_SET_SOURCE,
-              version: publication.version,
-              season: input.season,
-              week: input.week,
-              horizon: "week",
-              fetchedAt: input.sourceAsOf,
-              inputChecksum: publication.inputChecksum,
-              metadata: {
-                ...publication.metadata,
-                ...(input.inputSnapshot ? { inputSnapshot: input.inputSnapshot } : {}),
-                publicationClock,
-              },
-              createdAt: publicationStartedAt,
-            })
+            .values(
+              preparedPublications.map(({ id, publication }) => ({
+                id,
+                leagueSeasonId: publication.league.id,
+                createdByUserId: null,
+                visibility: "league" as const,
+                source: FIRST_PARTY_PROJECTION_SET_SOURCE,
+                version: publication.version,
+                season: input.season,
+                week: input.week,
+                horizon: "week" as const,
+                fetchedAt: input.sourceAsOf,
+                inputChecksum: publication.inputChecksum,
+                metadata: {
+                  ...publication.metadata,
+                  ...(input.inputSnapshot ? { inputSnapshot: input.inputSnapshot } : {}),
+                  publicationClock,
+                },
+                createdAt: publicationStartedAt,
+              })),
+            )
             .onConflictDoNothing({
               target: [projectionSets.source, projectionSets.version],
             })
             .returning({ id: projectionSets.id }),
         );
-        if (!set) continue;
-        for (const batch of chunks(publication.rows)) {
-          await withinBudget(
-            transaction.insert(playerProjections).values(
-              batch.map((row) => ({
-                projectionSetId: set.id,
-                playerId: row.playerId,
-                meanPoints: row.mean.toFixed(3),
-                floorPoints: row.floor.toFixed(3),
-                ceilingPoints: row.ceiling.toFixed(3),
-                confidence: row.confidence.toFixed(4),
-                components: row.components,
-              })),
-            ),
-          );
+        // A conflicting immutable version already owns its rows; insert only for newly created
+        // sets, even when a batch spans multiple leagues or PostgreSQL returns them out of order.
+        if (sets.length > 0) {
+          const insertedIds = sets.map((set) => set.id);
+          for (const batch of playerBatches) {
+            await withinBudget(
+              transaction.execute(sql`insert into ${playerProjections}
+              (projection_set_id, player_id, mean_points, floor_points, ceiling_points,
+                confidence, components)
+              select r.projection_set_id, r.player_id, r.mean_points, r.floor_points,
+                r.ceiling_points, r.confidence, r.components
+              from jsonb_to_recordset(${batch}::jsonb) as r(
+                projection_set_id uuid, player_id uuid, mean_points numeric, floor_points numeric,
+                ceiling_points numeric, confidence numeric, components jsonb
+              ) where ${inArray(sql`r.projection_set_id`, insertedIds)}`),
+            );
+          }
         }
       }
 
@@ -3715,24 +3772,11 @@ export class FirstPartyProjectionService implements ProjectionRefreshService {
     week: number,
   ): Promise<ReadonlyMap<string, ReadonlyMap<string, ScoredProjectionRow>>> {
     if (leagueSeasonIds.length === 0) return new Map();
-    const sets = await this.#database
-      .select({
-        id: projectionSets.id,
-        leagueSeasonId: projectionSets.leagueSeasonId,
-        metadata: projectionSets.metadata,
-      })
-      .from(projectionSets)
-      .where(
-        and(
-          inArray(projectionSets.leagueSeasonId, [...leagueSeasonIds]),
-          eq(projectionSets.source, FIRST_PARTY_PROJECTION_SET_SOURCE),
-          eq(projectionSets.season, season),
-          eq(projectionSets.week, week),
-          eq(projectionSets.horizon, "week"),
-        ),
-      )
-      // fetchedAt describes the oldest contributing source, not publication chronology.
-      .orderBy(desc(projectionSets.createdAt), desc(projectionSets.id));
+    const sets = await latestFirstPartyWeeklyProjectionSets(this.#database, {
+      leagueSeasonIds,
+      season,
+      week,
+    });
     const latestSetByLeague = new Map<string, string>();
     const scoringKeyBySet = new Map<string, string>();
     const pointPolicyBySet = new Map<string, string>();

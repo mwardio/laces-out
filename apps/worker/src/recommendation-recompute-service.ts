@@ -18,13 +18,16 @@ import {
   leagueMemberships,
   leagueSeasons,
   leagueSupplementalSnapshots,
+  projectionSets,
   recommendationRuns,
   recommendations,
   rosterSlotRules,
   rosterSnapshots,
   type Database,
 } from "@laces-out/db";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+
+import { PROJECTION_RETENTION_LOCK } from "./projection-retention.js";
 
 import {
   drizzleRecommendationDelta,
@@ -359,6 +362,23 @@ export class DrizzleRecommendationRunWriter implements RecommendationRunWriter {
     input: RecommendationRunInsert,
   ): Promise<{ readonly runId: string; readonly inserted: boolean }> {
     return this.#database.transaction(async (transaction) => {
+      await transaction.execute(sql`
+        select pg_advisory_xact_lock_shared(hashtextextended(${PROJECTION_RETENTION_LOCK}, 0))
+      `);
+      const projectionSetIds = [...new Set(input.provenance.inputs.projectionSetIds)];
+      if (projectionSetIds.length > 0) {
+        const existing = await transaction
+          .select({ id: projectionSets.id })
+          .from(projectionSets)
+          .where(inArray(projectionSets.id, projectionSetIds))
+          .for("key share");
+        if (existing.length !== projectionSetIds.length) {
+          // Retry the job with a fresh snapshot rather than save a dangling historical reference.
+          throw new Error(
+            "Recommendation projection inputs expired; recompute with a fresh snapshot",
+          );
+        }
+      }
       const inserted = await transaction
         .insert(recommendationRuns)
         .values({

@@ -978,6 +978,10 @@ describe.skipIf(!dockerAvailable)(
         FIRST_PARTY_ROS_MODEL_VERSION,
         FIRST_PARTY_ROS_POLICY_VERSION,
         FIRST_PARTY_ROS_INTERVAL_CALIBRATION_VERSION,
+        firstPartyRosReleaseIdentity("marginal-v8").policyVersion,
+        firstPartyRosReleaseIdentity("marginal-v8").calibrationVersion,
+        firstPartyRosReleaseIdentity("point-v1").policyVersion,
+        firstPartyRosReleaseIdentity("point-v1").calibrationVersion,
         LEAGUE_SCORING_NORMALIZATION_VERSION,
       ])
         expect(healthSql).toContain(version);
@@ -1096,13 +1100,27 @@ describe.skipIf(!dockerAvailable)(
           await sql`select set_config('laces.ros_release_rail', 'legacy-v7', true)`;
           const v7 = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
           expect(v7.find((row) => row.id === "current-healthy")?.age_hours).toBe("-1");
+          await sql`select set_config('laces.ros_release_rail', 'point-v1', true)`;
+          const missingPoint = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
+          expect(missingPoint.find((row) => row.id === "current-healthy")?.age_hours).toBe("-1");
+          await sql`
+            update first_party_ros_champion_artifacts
+              set policy_version=${firstPartyRosReleaseIdentity("point-v1").policyVersion},
+                  calibration_version=${firstPartyRosReleaseIdentity("point-v1").calibrationVersion}
+              where artifact_checksum='current-healthy-artifact'
+          `;
+          const point = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
+          expect(point.find((row) => row.id === "current-healthy")?.age_hours).toBe("1");
+          await sql`select set_config('laces.ros_release_rail', 'marginal-v8', true)`;
+          const wrongRail = await sql.unsafe<{ id: string; age_hours: string }[]>(healthSql);
+          expect(wrongRail.find((row) => row.id === "current-healthy")?.age_hours).toBe("-1");
           await sql`select set_config('laces.ros_release_rail', 'future-unknown-rail', true)`;
           expect(await sql.unsafe(healthSql)).toEqual([
             {
               id: "configuration-error",
               league_name: "ROS release rail configuration is invalid",
               age_hours: "-1",
-              published_at: "unavailable; select legacy-v7 or marginal-v8",
+              published_at: "unavailable; select legacy-v7, marginal-v8 or point-v1",
             },
           ]);
         });
@@ -1153,7 +1171,13 @@ describe.skipIf(!dockerAvailable)(
         readiness!.positions
           .filter((position) => position.decision === "ready")
           .map((position) => position.position),
-      ).toEqual(["QB", "K", "DST"]);
+      ).toEqual(["QB", "K"]);
+      // The catalog Full PPR defense uses Yahoo points-allowed semantics; this ESPN fixture
+      // must retain that mismatch even though its numerical brackets look identical.
+      expect(readiness!.positions.find((entry) => entry.position === "DST")).toMatchObject({
+        decision: "withheld",
+        reasons: ["scoring-profile-position-mismatch"],
+      });
       expect(status.publishedSets).toEqual([]);
     });
 
@@ -1197,10 +1221,10 @@ describe.skipIf(!dockerAvailable)(
      * the fix at the position axis: `projectionScoringProfileKeyForPosition` drops zero-point rules on
      * BOTH sides of the comparison (the admitted key's recovered rules and the league's own recovered
      * rules), so the same rule that makes the whole key unreachable never enters either position-scoped
-     * key in the first place. A genuinely matching league is therefore reachable position by position
-     * even while its harmless whole-key difference remains.
+     * key in the first place. Matching offense/kicker positions remain reachable. The provider's
+     * defense definition is a material difference and must still withhold D/ST.
      */
-    it("reports every position ready for a genuinely full-PPR league even though its whole-profile key is unreachable", () => {
+    it("accepts matching full-PPR positions but retains the ESPN/Yahoo defense mismatch", () => {
       const readiness = status.leagueReadiness.find(
         (entry) => entry.leagueSeasonId === fullPprLeague.leagueSeasonId,
       );
@@ -1210,6 +1234,11 @@ describe.skipIf(!dockerAvailable)(
 
       expect(readiness!.positions).toHaveLength(6);
       for (const entry of readiness!.positions) {
+        if (entry.position === "DST") {
+          expect(entry.decision).toBe("withheld");
+          expect(entry.reasons).toEqual(["scoring-profile-position-mismatch"]);
+          continue;
+        }
         expect(entry.decision, `${entry.position} should be reachable`).toBe("ready");
         expect(entry.reasons).toEqual([]);
       }

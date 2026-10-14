@@ -24,6 +24,7 @@ export const queueNames = {
   notificationSweep: "notification-sweep",
   providerSyncSweep: "provider-sync-sweep",
   emailSweep: "email-sweep",
+  projectionRetention: "projection-retention",
 } as const;
 
 export const deadLetterQueueNames = {
@@ -38,6 +39,7 @@ export const deadLetterQueueNames = {
   notificationSweep: "notification-sweep-dead-letter",
   providerSyncSweep: "provider-sync-sweep-dead-letter",
   emailSweep: "email-sweep-dead-letter",
+  projectionRetention: "projection-retention-dead-letter",
 } as const;
 
 export interface LeagueSyncJob {
@@ -147,6 +149,17 @@ export const SEASON_PROJECTION_REFRESH_HEARTBEAT_SECONDS = 5 * 60;
 /** Suppress a repeated 01:30 during DST fallback without skipping the next 23-hour spring run. */
 export const DAILY_PROJECTION_REFRESH_SINGLETON_SECONDS = 20 * 60 * 60;
 const queueConfigurations: Readonly<Record<keyof typeof queueNames, QueueConfiguration>> = {
+  projectionRetention: {
+    retryLimit: 2,
+    retryDelay: 60,
+    retryBackoff: true,
+    retryDelayMax: 600,
+    expireInSeconds: 900,
+    retentionSeconds: 14 * DAY_SECONDS,
+    deleteAfterSeconds: 7 * DAY_SECONDS,
+    deadLetter: deadLetterQueueNames.projectionRetention,
+    warningQueueSize: 2,
+  },
   syncLeague: {
     retryLimit: 5,
     retryDelay: 30,
@@ -807,6 +820,18 @@ export async function registerSchedules(boss: PgBoss, projectionSeason?: number)
       },
     );
   }
+  await boss.schedule(
+    queueNames.projectionRetention,
+    "17 * * * *",
+    {},
+    {
+      tz: "UTC",
+      key: "hourly-projection-retention",
+      group: { id: "projection-retention" },
+      singletonKey: "projection-retention",
+      singletonSeconds: 3_600,
+    },
+  );
 }
 
 export async function ensureDailyRefresh(boss: PgBoss, now = new Date()): Promise<void> {

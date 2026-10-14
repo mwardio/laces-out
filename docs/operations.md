@@ -467,6 +467,15 @@ when replacement fails. The memo retains compact evidence, not expanded historic
 for every league. Rosters, kickoff locks, live forecasts, source checks, and publication coverage
 are still evaluated for each job.
 
+Weekly refreshes select the newest prior set for each league, season, and target week in PostgreSQL
+before loading its metadata and player rows. Selection uses publication time and ID, preserving
+the original frozen scoring and interval provenance. Loading the entire publication history here
+can exhaust the isolated process heap as the season progresses, even with bounded model caches.
+Scored player rows are rounded and encoded before acquiring the input locks, then inserted in
+bounded JSON batches across league sets. New sets are inserted together; conflicted versions retain
+their original rows. The complete weekly publication still commits atomically within the existing
+eight-second input-lock budget, with the same source and kickoff checks.
+
 The child receives only the database connection, runtime mode, and UTC timezone. Cancellation,
 startup failure, or worker shutdown terminates it before another request can start; a child crash
 fails the current queue job and a later retry starts a fresh process. Structured lifecycle logs
@@ -713,6 +722,25 @@ leaving capacity on the six-core host for weekly work and the app.
 The sentinel now alerts on new issue keys after its observation debounce. Clearing a different
 issue no longer repeats every unresolved warning. It sends one ROS recovery confirmation when
 all monitored leagues are fresh, and separately detects a failed or retrying ROS publication job.
+
+The host sentinel sources `scripts/projection-publication-issues.sh` from the mounted repository.
+It reads `ROS_RELEASE_RAIL` from the running API and explicitly selects that rail for the ROS SQL;
+an unreadable or unknown serving configuration raises `ros-monitor-config`. The current query
+supports legacy, marginal, and point-only releases. Both its release identities and scoring mapping
+must match the deployed constants.
+
+Weekly monitoring uses `scripts/weekly-publication-health.sql` to check each active league's current
+week, actual rows, model/scoring/publication identity, published positions, and latest league-specific
+withholding evidence. The reference profile's rejected model run does not imply that independently
+validated league publications failed. Publication age uses `projection_sets.created_at`;
+`fetched_at` can legitimately describe an older immutable historical input. Missing, partial, stale,
+or obsolete league output remains actionable, while wholly unsupported scoring is reported as an
+observation. Query failures and repeated source failures remain separate issues.
+
+Run `bash scripts/projection-publication-issues.test.sh` for the notification-free shell checks.
+The API ROS-status and worker projection-service PostgreSQL suites exercise the real monitor SQL
+against disposable databases. The host sentinel's `--report-only` option refreshes the operations
+report without sending Telegram messages or advancing notification/debounce state.
 A lock prevents overlapping sentinel processes from racing the delivery state. Delivery failures
 leave the notification pending. The state regression test is
 `/home/mack/stacks/monitoring/laces-out-ops/notify-state.test.sh`.
