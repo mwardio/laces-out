@@ -197,19 +197,21 @@ extension's ID:
 - **Store build:** the published listing's permanent ID is `hmilkmcjlkpnigcfnlfogeafacjpmkbj`,
   baked into the web app as the primary target (store IDs never change across updates).
   `NEXT_PUBLIC_BRIDGE_EXTENSION_ID` remains an optional override in case the listing is ever
-  recreated. The store manifest drops the `key` (uploads must not
-  contain one) and limits externally initiated messages to `https://laces.mward.io/*` and
-  `https://lacesout.app/*`. Self-hosted sites never receive external-messaging access.
+  recreated. The store manifest drops the `key` (uploads must not contain one) and limits
+  externally initiated messages to the former hosted origins listed in
+  [the build script](./scripts/copy-assets.mjs). Self-hosted sites use one-time-code pairing
+  instead of external-messaging access.
 
 The companion processes configured leagues sequentially to keep memory and network use bounded.
 One league failure does not stop later leagues. The popup retains a per-league result and reports
 full success, partial failure, ESPN sign-in required, or a rejected Laces Out pairing separately.
 All configured leagues currently use the same season value.
 
-The popup defaults to the hosted deployment at `https://lacesout.app`. A packaged local Docker
-deployment uses `http://localhost:3000`; a direct local development API normally uses
-`http://localhost:4000`. Always confirm against the API URL shown by the Laces Out connections
-screen.
+The maintainer's hosted instance is temporarily offline. Use **Pair a self-hosted instance**
+and enter your installation's URL rather than accepting the popup's legacy hosted default. A
+packaged local Docker deployment uses `http://localhost:3000`; a direct local development API
+normally uses `http://localhost:4000`. Always confirm against the API URL shown by your Laces Out
+connections screen.
 
 Developer mode is only for local testing. Friends should use the signed, unlisted Chrome Web Store
 listing so updates are authenticated and the extension ID remains stable.
@@ -238,7 +240,9 @@ The unlisted listing is published at
 For future releases:
 
 1. Upload `dist-package/laces-out-espn-bridge-store-v<version>.zip`.
-2. Privacy policy URL: `https://lacesout.app/privacy` (required — the extension handles league data).
+2. Supply a publicly accessible privacy policy URL before publishing (required — the extension
+   handles league data). The former hosted policy is offline; use [the privacy documentation](../../docs/privacy.md)
+   as the source for a policy served from a domain you operate.
 3. Justify permissions in the listing form: `alarms`/`storage` for scheduled local sync and pairing
    state; `cookies` to read the exact ESPN `SWID` value for user-initiated league discovery and,
    with `espn_s2`, after a member explicitly enables always-on sync (including when ESPN marks
